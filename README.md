@@ -1,39 +1,43 @@
 # Music Source Separation
 
-一个基于 PyTorch 的音乐源分离实验项目，包含 BS-Roformer、Mel-Band
-Roformer、SCNet、BandIt v2，以及可选的说话人引导、判别器和扩散模块。
+An experimental PyTorch project for music source separation. The repository
+includes BS-Roformer, Mel-Band Roformer, SCNet, and BandIt v2, together with
+optional speaker-guided, discriminator, and diffusion components.
 
 > [!IMPORTANT]
-> 仓库仍处于实验整理阶段。基础推理链路和部分模型代码已提供，但训练脚本、
-> 说话人模型资产及部分旧判别器代码尚未经过完整的端到端验证。使用前请检查
-> 配置、数据路径和设备参数。
+> This repository is still being organized as an experimental project. The
+> basic inference pipeline and several model implementations are available,
+> but the training entry points, speaker-model assets, and some legacy
+> discriminator code have not yet been fully validated end to end. Review the
+> configuration, dataset paths, and device settings before running them.
 
-## 仓库结构
+## Repository layout
 
 ```text
 .
-├── ckpts/                 # 原项目配置和 Git LFS 权重
-├── models/                # 音源分离模型
-├── diffusion/             # 可选扩散模块
-├── discriminator/         # 可选判别器模块
-├── spk_extract/           # CAMPPlus 说话人特征代码
-├── utils/                 # 数据、损失、指标和推理工具
-├── mss_api/               # API/导出相关实验代码
-├── inference.py           # 基础文件夹推理入口
-├── inference_with_spk.py  # 说话人引导实验入口
-└── train_accelerate_*.py  # Accelerate 训练入口
+├── ckpts/                 # Original configuration files and Git LFS weights
+├── models/                # Source-separation models
+├── diffusion/             # Optional diffusion components
+├── discriminator/         # Optional discriminator components
+├── spk_extract/           # CAMPPlus speaker-feature code
+├── utils/                 # Data, loss, metric, and inference utilities
+├── mss_api/               # Experimental API and export code
+├── inference.py           # Basic directory-based inference entry point
+├── inference_with_spk.py  # Experimental speaker-guided entry point
+└── train_accelerate_*.py  # Accelerate training entry points
 ```
 
-## 环境准备
+## Environment setup
 
-推荐环境：
+Recommended environment:
 
-- Linux 或 WSL2
+- Linux or WSL2
 - Python 3.10
-- NVIDIA GPU（CPU 可用于基础验证，但大型模型推理会很慢）
-- FFmpeg、Git LFS
+- An NVIDIA GPU (a CPU is sufficient for basic checks, but inference with
+  large models will be slow)
+- FFmpeg and Git LFS
 
-创建环境：
+Create and activate the environment:
 
 ```bash
 conda create -n mss python=3.10 -y
@@ -41,8 +45,9 @@ conda activate mss
 python -m pip install --upgrade pip
 ```
 
-先根据设备安装匹配的 PyTorch。下面是 CUDA 13.0 的示例；其他平台请使用
-[PyTorch 官方安装选择器](https://pytorch.org/get-started/locally/)生成命令。
+Install a PyTorch build that matches your hardware first. The command below is
+an example for CUDA 13.0. For other platforms, generate the appropriate command
+with the [official PyTorch installation selector](https://pytorch.org/get-started/locally/).
 
 ```bash
 python -m pip install \
@@ -50,61 +55,70 @@ python -m pip install \
   --index-url https://download.pytorch.org/whl/cu130
 ```
 
-安装项目的主要运行依赖：
+Install the main runtime dependencies:
 
 ```bash
 python -m pip install -r requirements.txt
 ```
 
-训练环境在此基础上安装：
+For training, install the additional training dependencies:
 
 ```bash
 python -m pip install -r requirements-train.txt
 ```
 
-需要可选优化器、旧判别器、实时音频或 ONNX 导出时，再安装：
+Install the optional dependencies only if you need the additional optimizers,
+legacy discriminator modules, real-time audio support, or ONNX export:
 
 ```bash
 python -m pip install -r requirements-optional.txt
 ```
 
-Debian/Ubuntu/WSL 先安装基础系统依赖和 Git LFS：
+On Debian, Ubuntu, or WSL, install the base system dependencies and Git LFS:
 
 ```bash
 sudo apt-get update
 sudo apt-get install -y ffmpeg git-lfs libsndfile1
 ```
 
-仅在使用实时音频的 `pyaudio` 时再安装 PortAudio 开发库：
+Install the PortAudio development package only when using `pyaudio` for
+real-time audio:
 
 ```bash
 sudo apt-get install -y portaudio19-dev
 ```
 
-## 原始权重
+## Original checkpoints
 
-`ckpts/` 中的权重属于原项目资产，并通过 Git LFS 跟踪。克隆后运行：
+The weights under `ckpts/` are original project assets tracked with Git LFS.
+After cloning the repository, download them with:
 
 ```bash
 git lfs install
 git lfs pull
 ```
 
-可以用以下命令确认文件不是未下载的 LFS 指针：
+Use the following commands to check that the files are downloaded objects
+rather than unresolved LFS pointer files:
 
 ```bash
 git lfs status
 stat -c '%n %s bytes' ckpts/multi_stem/*.ckpt
 ```
 
-本次工程整理不修改、替换或重新生成 `ckpts/` 中的任何权重。
+The repository cleanup did not modify, replace, or regenerate any weight under
+`ckpts/`.
 
-## 零条件推理候选（未验证）
+## Zero-conditioned inference candidate (unverified)
 
-仓库中唯一随配置记录的 checkpoint 属于 `spk_bs_roformer`。下面的
-`inference.py` 不传入 speaker embedding，模型实际以 `speaker_embedding=None`
-运行，因此它只适合作为零条件/blind smoke 候选，不代表完整的说话人引导推理。
-将待处理音频放入单独目录，例如 `dataset/demo/`，候选命令为：
+The only checkpoint referenced by a bundled configuration is for
+`spk_bs_roformer`. The following `inference.py` invocation does not provide a
+speaker embedding, so the model runs with `speaker_embedding=None`. Treat this
+only as a candidate zero-conditioned/blind smoke test, not as complete
+speaker-guided inference.
+
+Place the audio files to process in a dedicated directory such as
+`dataset/demo/`, then use:
 
 ```bash
 python inference.py \
@@ -116,50 +130,70 @@ python inference.py \
   --device_ids 0
 ```
 
-该模型类型来自仓库原有推理脚本，但当前工作区只含 135 字节的 LFS 指针，未下载
-约 1.45 GB 原始权重，因此这条命令尚未在当前机器完成端到端验证，零条件输出质量
-也没有保证。强制使用 CPU 时添加 `--force_cpu`。查看全部参数：
+This model type comes from the repository's original inference script. At the
+time of the project cleanup, however, the working tree contained only the
+135-byte LFS pointer rather than the approximately 1.45 GB checkpoint object.
+The command has therefore not been validated end to end in that environment,
+and no guarantee is made about zero-conditioned output quality.
+
+Add `--force_cpu` to force CPU execution. To see every available option, run:
 
 ```bash
 python inference.py --help
 ```
 
-## 说话人引导推理
+## Speaker-guided inference
 
-`inference_with_spk.py` 仍属于实验入口。它按三阶段运行：先做零条件 blind
-separation，再从得到的 `vocals.wav` 调用外部脚本提取 embedding，最后使用该
-embedding 再做 guided separation。它需要额外的 CAMPPlus 模型和说话人嵌入提取
-脚本。通过环境变量指定外部提取环境：
+`inference_with_spk.py` remains an experimental entry point. It runs in three
+stages: first it performs a zero-conditioned blind separation, then it invokes
+an external script to extract an embedding from the resulting `vocals.wav`,
+and finally it performs a guided separation with that embedding.
+
+This workflow requires an additional CAMPPlus model and a speaker-embedding
+extraction script. Specify the external Python environment and script with:
 
 ```bash
 export MSS_SPEAKER_PYTHON=/path/to/speaker-env/bin/python
 export MSS_SPEAKER_SCRIPT=/path/to/batch_extract_embeddings.py
 ```
 
-外部脚本必须为每个输入文件生成
-`<store_dir>/embeddings/<输入文件名>/embedding.npy`（单数）。这与训练集每首歌曲
-目录中的 `embeddings.npy`（复数）不是同一个文件约定。每次运行都会删除并重建
-`<store_dir>/embeddings`，因此请为 `--store_dir` 使用专用输出目录，不要在该子目录
-保存需要保留的文件。
+For each input file, the external script must create:
 
-仓库中现有的两个 CAMPPlus 目录记录是旧 gitlink，但缺少对应的
-`.gitmodules` 来源信息，因此全新克隆不会自动取得该模型。请在确认原始模型
-来源后自行放置资产；不要把未知或替代权重覆盖到 `ckpts/`。
+```text
+<store_dir>/embeddings/<input-filename>/embedding.npy
+```
 
-## 训练
+The singular filename `embedding.npy` used here is different from the plural
+`embeddings.npy` expected inside each training-track directory. Every run
+deletes and recreates `<store_dir>/embeddings`, so use a dedicated
+`--store_dir` and do not keep files that must be preserved in that
+subdirectory.
 
-训练使用 Hugging Face Accelerate。安装训练依赖后可先完成本机配置：
+The two CAMPPlus paths currently recorded in the repository are legacy
+gitlinks, but no `.gitmodules` file records their repository URLs. A fresh
+clone therefore cannot retrieve that model automatically. Obtain and place the
+asset only after confirming its original source; do not overwrite anything
+under `ckpts/` with an unknown or substitute weight.
+
+## Training
+
+Training uses Hugging Face Accelerate. After installing the training
+dependencies, configure Accelerate for the local machine:
 
 ```bash
 accelerate config
 ```
 
-在 [train_accelerate.sh](train_accelerate.sh) 顶部填写模型、配置、训练集、验证集、
-输出目录和 GPU 参数后启动。数据目录格式与检查清单见
-[训练数据准备说明](docs/TRAINING_DATA.md)。建议先使用单卡、小数据集验证数据读取
-和一次前向/反向传播，再启动多卡训练。
+Fill in the model, configuration, training data, validation data, output
+directory, and GPU settings near the top of
+[`train_accelerate.sh`](train_accelerate.sh), then run the script. See the
+English [training data preparation guide](docs/TRAINING_DATA.md) for dataset
+layouts and the validation checklist.
 
-## 开发检查
+Before launching a multi-GPU job, first use one GPU and a small dataset to
+verify data loading and one forward/backward pass.
+
+## Development checks
 
 ```bash
 python -m pip install -r requirements-dev.txt
@@ -168,17 +202,22 @@ python -m compileall -q .
 bash -n train_accelerate.sh infer_with_spk.sh
 ```
 
-贡献约定见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for contribution guidelines.
 
-## 已知限制
+## Known limitations
 
-- 当前仓库没有完整的端到端测试数据，CI 只执行不需要模型权重的静态检查。
-- 旧判别器目录仍保留部分历史接口和脚本路径，尚未全部迁移为包内导入。
-- TensorRT、SageAttention 等组件与本机 CUDA/编译器强相关，不包含在默认依赖中。
-- 项目根目录目前没有明确许可证；使用或分发前请由项目作者补充授权条款。
+- The repository does not include a complete end-to-end test dataset. CI runs
+  only static checks that do not require model weights.
+- The legacy discriminator directory still contains historical interfaces and
+  script paths that have not all been migrated to package-relative imports.
+- Components such as TensorRT and SageAttention depend heavily on the local
+  CUDA toolkit and compiler and are not included in the default dependencies.
+- The repository currently has no explicit root-level license. The project
+  owner should add licensing terms before the project is used or distributed.
 
-## 致谢
+## Acknowledgments
 
-部分训练与推理结构参考了
-[ZFTurbo/Music-Source-Separation-Training](https://github.com/ZFTurbo/Music-Source-Separation-Training)。
-各源码文件中保留的第三方版权和许可证声明仍然适用。
+Parts of the training and inference structure were inspired by
+[ZFTurbo/Music-Source-Separation-Training](https://github.com/ZFTurbo/Music-Source-Separation-Training).
+Third-party copyright and license notices retained in individual source files
+continue to apply.
