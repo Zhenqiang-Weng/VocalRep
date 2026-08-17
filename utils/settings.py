@@ -173,13 +173,15 @@ def parse_args_inference(dict_args: Union[Dict, None]) -> argparse.Namespace:
         configuration values.
     """
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model_type", type=str, default='mdx23c',
-                        help="One of bandit, bandit_v2, bs_roformer, htdemucs, mdx23c, mel_band_roformer,"
-                             " scnet, scnet_unofficial, segm_models, swin_upernet, torchseg")
-    parser.add_argument("--config_path", type=str, help="path to config file")
+    cli_required = dict_args is None
+    parser.add_argument("--model_type", type=str, required=cli_required,
+                        help="Model identifier supported by get_model_from_config, for example spk_bs_roformer")
+    parser.add_argument("--config_path", type=str, required=cli_required, help="Path to the model config file")
     parser.add_argument("--start_check_point", type=str, default='', help="Initial checkpoint to valid weights")
-    parser.add_argument("--input_folder", type=str, help="folder with mixtures to process")
-    parser.add_argument("--store_dir", type=str, default="", help="path to store results as wav file")
+    parser.add_argument("--input_folder", type=str, required=cli_required,
+                        help="Folder containing mixtures to process")
+    parser.add_argument("--store_dir", type=str, required=cli_required,
+                        help="Directory in which to store inference results")
     parser.add_argument("--draw_spectro", type=float, default=0,
                         help="Code will generate spectrograms for resulted stems."
                              " Value defines for how many seconds os track spectrogram will be generated.")
@@ -202,8 +204,8 @@ def parse_args_inference(dict_args: Union[Dict, None]) -> argparse.Namespace:
     parser.add_argument("--diffusion_steps", type=int, default=10, help="Number of diffusion steps for inference")
     parser.add_argument("--diffusion_model_path", type=str, default='', help="Path to diffusion model checkpoint")
     
-    parser.add_argument('--musdb_root', type=str, default='/user-fs/chenzihao/wengzhenqiang/Music-Source-Separation-Training/dataset/musdb18hq',
-                        help='Path to MUSDB18HQ root directory')
+    parser.add_argument('--musdb_root', type=str, default='',
+                        help='Optional path to the MUSDB18HQ root directory')
     parser.add_argument('--musdb_is_wav', action='store_true', help='Whether MUSDB is in WAV format')
     parser.add_argument('--eval_output_dir', type=str, default='./musdb_eval_results',
                         help='Directory to save MUSDB evaluation results')
@@ -216,6 +218,16 @@ def parse_args_inference(dict_args: Union[Dict, None]) -> argparse.Namespace:
         args = argparse.Namespace(**args_dict)
     else:
         args = parser.parse_args()
+
+    required_args = ("model_type", "config_path", "input_folder", "store_dir")
+    missing_args = [name for name in required_args if not getattr(args, name, None)]
+    if missing_args:
+        message = "Missing required inference arguments: " + ", ".join(
+            f"--{name}" for name in missing_args
+        )
+        if dict_args is not None:
+            raise ValueError(message)
+        parser.error(message)
 
     return args
 
@@ -282,15 +294,9 @@ def get_model_from_config(model_type: str, config_path: str) -> Tuple[nn.Module,
     if model_type == 'mel_band_roformer':
         from models.bs_roformer import MelBandRoformer
         model = MelBandRoformer(**dict(config.model))
-    elif model_type == 'mel_band_roformer_disc':
-        from models.bs_roformer.mel_band_roformer import MelBandRoformerDisc
-        model = MelBandRoformerDisc(**dict(config.model))
     elif model_type == 'td_mel_band_roformer':
         from models.bs_roformer.mel_band_roformer import TDMelBandRoformer
         model = TDMelBandRoformer(**dict(config.model))
-    elif model_type == 'band_conditioned_mel_band_roformer':
-        from models.bs_roformer.mel_band_roformer import BandConditionalMelBandRoformer
-        model = BandConditionalMelBandRoformer(**dict(config.model))
     elif model_type == 'mel_band_roformer_experimental':
         from models.bs_roformer.mel_band_roformer_experimental import MelBandRoformer
         model = MelBandRoformer(**dict(config.model))

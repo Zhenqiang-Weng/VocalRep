@@ -1,0 +1,9 @@
+-r requirements.txt
+
+accelerate>=1.0,<2
+audiomentations>=0.37,<1
+auraloss>=0.4,<1
+lameenc>=1.7,<2
+pandas>=2.1,<4
+pedalboard>=0.9,<1
+torch-log-wmse>=0.3,<1

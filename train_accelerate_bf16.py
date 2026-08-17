@@ -2,10 +2,8 @@
 __author__ = 'Roman Solovyev (ZFTurbo): https://github.com/ZFTurbo/'
 __version__ = '1.0.6'
 
-import argparse
 import soundfile as sf
 import numpy as np
-import time
 import glob
 from tqdm.auto import tqdm
 import os
@@ -17,13 +15,12 @@ from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 import torch.nn.functional as F
 from accelerate import Accelerator
-from accelerate.utils import DistributedDataParallelKwargs
 
 from utils.dataset_with_spk import MSSDatasetWithSpk
 from utils.model_utils import prefer_target_instrument, demix_with_spk
 from utils.metrics import get_metrics
 from utils.settings import manual_seed, get_model_from_config
-from utils.losses import masked_loss
+from utils.training_cli import build_training_parser, build_wandb_config
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -207,34 +204,21 @@ def train_model(args):
     accelerator = Accelerator()
     device = accelerator.device
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--model_type", type=str, default='mdx23c')
-    parser.add_argument("--config_path", type=str)
-    parser.add_argument("--start_check_point", type=str, default='')
-    parser.add_argument("--results_path", type=str)
-    parser.add_argument("--data_path", nargs="+", type=str)
-    parser.add_argument("--dataset_type", type=int, default=1)
-    parser.add_argument("--valid_path", nargs="+", type=str)
-    parser.add_argument("--num_workers", type=int, default=0)
-    parser.add_argument("--pin_memory", type=bool, default=False)
-    parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--device_ids", nargs='+', type=int, default=[0,1,2,3])
-    parser.add_argument("--use_multistft_loss", action='store_true')
-    parser.add_argument("--use_mse_loss", action='store_true')
-    parser.add_argument("--use_l1_loss", action='store_true')
-    parser.add_argument("--wandb_key", type=str, default='')
-    parser.add_argument("--pre_valid", action='store_true')
-    parser.add_argument("--wandb_project", type=str, default='msst-accelerate')
-    parser.add_argument("--wandb_name", type=str, default='')
-    parser.add_argument("--use_mix_consistent_loss", action='store_true')
+    parser = build_training_parser(
+        "Train a speaker-guided music source separator.",
+        include_mix_consistent_loss=True,
+    )
 
     if args is None:
         args = parser.parse_args()
     else:
         args = parser.parse_args(args)
 
-    manual_seed(args.seed + int(time.time()))
-    torch.backends.cudnn.deterministic = False
+    manual_seed(args.seed + accelerator.process_index)
+    torch.backends.cudnn.deterministic = args.deterministic
+    torch.backends.cudnn.benchmark = not args.deterministic
+    if args.deterministic:
+        torch.use_deterministic_algorithms(True, warn_only=True)
 
     try:
         torch.multiprocessing.set_start_method('spawn', force=True)
@@ -251,26 +235,35 @@ def train_model(args):
 
     device_ids = args.device_ids
     batch_size = config.training.batch_size
+    run_config = build_wandb_config(args, config, device_ids, batch_size)
 
     if accelerator.is_main_process:
         if args.wandb_key is not None and args.wandb_key.strip() != '':
             wandb.login(key=args.wandb_key)
-            wandb.init(project=args.wandb_project, name=args.wandb_name, config={'config': config, 'args': args, 'device_ids': device_ids, 'batch_size': batch_size})
+            wandb.init(project=args.wandb_project, name=args.wandb_name, config=run_config)
         else:
-            wandb.init(project=args.wandb_project, name=args.wandb_name, mode='offline', config={'config': config, 'args': args, 'device_ids': device_ids, 'batch_size': batch_size})
+            wandb.init(
+                project=args.wandb_project,
+                name=args.wandb_name,
+                mode='offline',
+                config=run_config,
+            )
     else:
         wandb.init(mode='disabled')
 
     config.training.num_steps *= accelerator.num_processes
 
-    trainset = MSSDatasetWithSpk(
-        config,
-        args.data_path,
-        batch_size=batch_size,
-        metadata_path=os.path.join(args.results_path, 'metadata_{}.pkl'.format(args.dataset_type)),
-        dataset_type=args.dataset_type,
-        verbose=accelerator.is_main_process,
-    )
+    # Only the main process builds the metadata cache; the remaining processes
+    # wait and then reuse it instead of writing the same pickle concurrently.
+    with accelerator.main_process_first():
+        trainset = MSSDatasetWithSpk(
+            config,
+            args.data_path,
+            batch_size=batch_size,
+            metadata_path=os.path.join(args.results_path, 'metadata_{}.pkl'.format(args.dataset_type)),
+            dataset_type=args.dataset_type,
+            verbose=accelerator.is_main_process,
+        )
 
     train_loader = DataLoader(
         trainset,
@@ -492,7 +485,8 @@ def train_model(args):
                 accelerator.save(unwrapped_model.state_dict(), store_path)
                 best_sdr = sdr_avg
 
-            scheduler.step(sdr_avg)
+        # Every distributed process must advance its scheduler identically.
+        scheduler.step(sdr_avg)
 
         metrics_dict = None
         gathered_metrics = None

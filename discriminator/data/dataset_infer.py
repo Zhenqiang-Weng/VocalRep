@@ -7,11 +7,11 @@ import json
 import numpy as np
 
 import torch
-import torch.utils.data import Dataset
+from torch.utils.data import Dataset
 
-from helpers.processor import TextProcessor, Specprocessor
-from utils.functional import interpolate, aggregate_by_duration
-from utils.transform import Transform, ToTensor, Pad, Normalize, Quantize, Clamp
+from discriminator.helpers.processor import SpecProcessor, TextProcessor
+from discriminator.utils.functional import aggregate_by_duration, interpolate
+from discriminator.utils.transform import Clamp, Normalize, Pad, Quantize, ToTensor, Transform
 
 
 class SpeechDataset(Dataset):
@@ -39,7 +39,7 @@ class SpeechDataset(Dataset):
         ## Spectrograms
         if 'specs' in self.keys:
             if self._spec_processor is None:
-                self._spec_processor = Specprocessor(self.hparams)
+                self._spec_processor = SpecProcessor(self.hparams)
             paths, stems = self._spec_processor(paths)
         else:
             paths, stems = [ None ] * len(paths), paths

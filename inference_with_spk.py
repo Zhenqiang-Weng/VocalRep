@@ -213,8 +213,18 @@ def run_folder(model, args, config, device, verbose: bool = False):
         detailed_pbar = True
 
     # Define paths for external speaker extraction
-    SPEAKER_PYTHON_EXE = "/user-fs/chenzihao/wengzhenqiang/miniconda3/envs/speaker/bin/python"
-    SPEAKER_SCRIPT_PATH = "/user-fs/chenzihao/wengzhenqiang/speaker/batch_extract_embeddings.py"
+    speaker_python_exe = os.environ.get("MSS_SPEAKER_PYTHON", sys.executable)
+    speaker_script_path = os.environ.get("MSS_SPEAKER_SCRIPT", "")
+
+    if not speaker_script_path:
+        print(
+            "MSS_SPEAKER_SCRIPT is not set. Point it to the external "
+            "batch_extract_embeddings.py script before speaker-guided inference."
+        )
+        return
+    if not os.path.isfile(speaker_script_path):
+        print(f"Speaker extraction script does not exist: {speaker_script_path}")
+        return
     
     # Directories
     wo_spk_dir = os.path.join(args.store_dir, 'wo_spk')
@@ -283,8 +293,8 @@ def run_folder(model, args, config, device, verbose: bool = False):
 
     print(f"Extracting embeddings from {wo_spk_dir}...")
     cmd = [
-        SPEAKER_PYTHON_EXE,
-        SPEAKER_SCRIPT_PATH,
+        speaker_python_exe,
+        speaker_script_path,
         "--input_dir", wo_spk_dir,
         "--output_dir", embeddings_dir,
         "--num_samples", "200"
@@ -296,7 +306,7 @@ def run_folder(model, args, config, device, verbose: bool = False):
         print("Aborting guided separation.")
         return
     except FileNotFoundError:
-        print(f"Could not find python executable at {SPEAKER_PYTHON_EXE}")
+        print(f"Could not find python executable at {speaker_python_exe}")
         return
 
     # --- PHASE 3: Guided Separation ---

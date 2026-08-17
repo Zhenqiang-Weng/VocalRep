@@ -27,7 +27,7 @@ class Logger(object):
     def log_train(self, phase, unit, count, loss_dict, lr_dict=None, image_dict=None):
         if lr_dict is not None:
             loss_dict.update(lr_dict) # scalar info
-        for key in sorted(loss_dict)
+        for key in sorted(loss_dict):
             self.writer.add_scalar(f"{phase}/{unit}/{key}", loss_dict[key], count)
         if self.wandb is not None:
             self.wandb.log({f"{phase}/{unit}/{key}": val for key, val in loss_dict.items()})

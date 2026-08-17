@@ -1,22 +1,59 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
 
+# Virtual environments and local environment files
+.venv/
+venv/
+env/
+.env
+.env.*
+!.env.example
 
-# 忽略音频
+# Editors and operating systems
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Audio data and datasets
 *.wav
 *.mp3
 *.flac
+/data/
+/dataset/
 
-# 忽略数据集
-data/
-dataset/
-
-# 忽略日志
-logs/
+# Training and experiment outputs
+/logs/
 *.log
+/results/
+/wandb/
+/runs/
+/checkpoints/
+/test_sample/
+/musdb_eval_results/
 
-# python
-__pycache__/
-*.pyc
+# New model binaries require an explicit, reviewed Git LFS add. Existing
+# tracked checkpoints remain tracked even when these patterns are present.
+*.ckpt
+*.pt
+*.pth
+*.safetensors
 
-# mac
-.DS_Store"ckpts/" 
-"*.ckpt" 
+# Generated export artifacts
+*.engine
+*.onnx
+*.trt
+/exported_spk/
+
+# Temporary files
+*.tmp
+*.swp
+*.swo
+*~

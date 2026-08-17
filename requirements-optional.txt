@@ -1,0 +1,26 @@
+# Optional optimizers
+bitsandbytes>=0.45,<1
+prodigyopt>=1.0,<2
+
+# Optional model families
+hyper-connections>=0.1,<1
+pytorch-lightning>=2.2,<3
+transformers>=4.40,<6
+
+# Legacy discriminator utilities
+fastdtw>=0.3.4,<1
+numba>=0.59,<1
+pytorch-ignite>=0.5,<1
+pyworld>=0.3.4,<1
+requests>=2.31,<3
+scikit-image>=0.23,<1
+tensorboardX>=2.6,<3
+umap-learn>=0.5,<1
+webrtcvad>=2.0.10,<3
+
+# Streaming and model export
+keyboard>=0.13,<1
+onnx>=1.16,<2
+onnxruntime>=1.18,<2
+onnxscript>=0.3,<1
+pyaudio>=0.2.14,<1

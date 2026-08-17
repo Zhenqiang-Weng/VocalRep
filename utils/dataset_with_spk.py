@@ -223,7 +223,8 @@ class MSSDatasetWithSpk(torch.utils.data.Dataset):
         if os.path.isfile(self.metadata_path):
             if self.verbose and should_print:
                 print('Found metadata cache file: {}'.format(self.metadata_path))
-            old_metadata = pickle.load(open(self.metadata_path, 'rb'))
+            with open(self.metadata_path, 'rb') as metadata_file:
+                old_metadata = pickle.load(metadata_file)
         else:
             return track_paths, metadata
 
@@ -365,8 +366,11 @@ class MSSDatasetWithSpk(torch.utils.data.Dataset):
                 print('Unknown dataset type: {}. Must be 1, 2, 3 or 4'.format(self.dataset_type))
             exit()
 
-        # Save metadata
-        pickle.dump(metadata, open(self.metadata_path, 'wb'))
+        # In distributed launches only rank 0 writes the shared cache. Other
+        # processes reuse it after the launcher's main-process-first barrier.
+        if should_print:
+            with open(self.metadata_path, 'wb') as metadata_file:
+                pickle.dump(metadata, metadata_file)
         return metadata
 
     def load_source(self, metadata, instr):
