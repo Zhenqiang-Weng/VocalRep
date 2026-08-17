@@ -109,39 +109,6 @@ stat -c '%n %s bytes' ckpts/multi_stem/*.ckpt
 The repository cleanup did not modify, replace, or regenerate any weight under
 `ckpts/`.
 
-## Zero-conditioned inference candidate (unverified)
-
-The only checkpoint referenced by a bundled configuration is for
-`spk_bs_roformer`. The following `inference.py` invocation does not provide a
-speaker embedding, so the model runs with `speaker_embedding=None`. Treat this
-only as a candidate zero-conditioned/blind smoke test, not as complete
-speaker-guided inference.
-
-Place the audio files to process in a dedicated directory such as
-`dataset/demo/`, then use:
-
-```bash
-python inference.py \
-  --model_type spk_bs_roformer \
-  --config_path ckpts/multi_stem/config.yaml \
-  --start_check_point ckpts/multi_stem/model_spk_bs_roformer_ep_5_sisdr_9.8275.ckpt \
-  --input_folder dataset/demo \
-  --store_dir results/demo \
-  --device_ids 0
-```
-
-This model type comes from the repository's original inference script. At the
-time of the project cleanup, however, the working tree contained only the
-135-byte LFS pointer rather than the approximately 1.45 GB checkpoint object.
-The command has therefore not been validated end to end in that environment,
-and no guarantee is made about zero-conditioned output quality.
-
-Add `--force_cpu` to force CPU execution. To see every available option, run:
-
-```bash
-python inference.py --help
-```
-
 ## Speaker-guided inference
 
 `inference_with_spk.py` remains an experimental entry point. It runs in three
