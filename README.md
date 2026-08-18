@@ -1,31 +1,19 @@
-# Music Source Separation
+# VocalRep: Structure-Aware Vocal Representations for Multimodal Generation
 
-An experimental PyTorch project for music source separation. The repository
-includes BS-Roformer, Mel-Band Roformer, SCNet, and BandIt v2, together with
-optional speaker-guided, discriminator, and diffusion components.
+Official PyTorch implementation of **VocalRep: Structure-Aware Vocal Representations for Multimodal Generation**.
+
+**Project Page:** https://zhenqiang-weng.github.io/VocalRep_/
+
+VocalRep is a structure-aware learning framework for disentangling **lead vocals, backing harmonies, and instrumental components** while maintaining role consistency across long-form audio. The framework combines global vocal identity conditioning with ranking-based objectives to obtain temporally stable and semantically unambiguous vocal representations for downstream multimodal generation tasks, including singing voice conversion and audio-driven lip synchronization.
+
+This repository contains the source-separation models, training and inference utilities, and experimental components associated with VocalRep. Supported separation backbones include BS-Roformer, Mel-Band Roformer, SCNet, and BandIt v2.
 
 > [!IMPORTANT]
-> This repository is still being organized as an experimental project. The
-> basic inference pipeline and several model implementations are available,
-> but the training entry points, speaker-model assets, and some legacy
-> discriminator code have not yet been fully validated end to end. Review the
-> configuration, dataset paths, and device settings before running them.
-
-## Repository layout
-
-```text
-.
-├── ckpts/                 # Original configuration files and Git LFS weights
-├── models/                # Source-separation models
-├── diffusion/             # Optional diffusion components
-├── discriminator/         # Optional discriminator components
-├── spk_extract/           # CAMPPlus speaker-feature code
-├── utils/                 # Data, loss, metric, and inference utilities
-├── mss_api/               # Experimental API and export code
-├── inference.py           # Basic directory-based inference entry point
-├── inference_with_spk.py  # Experimental speaker-guided entry point
-└── train_accelerate_*.py  # Accelerate training entry points
-```
+> This repository is still being organized as an experimental research codebase.
+> The basic inference pipeline and several model implementations are available,
+> while some training entry points, speaker-model assets, and legacy
+> discriminator components are still undergoing end-to-end validation.
+> Additional code, checkpoints, and documentation will be released progressively.
 
 ## Environment setup
 
