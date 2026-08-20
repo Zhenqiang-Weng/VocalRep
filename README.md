@@ -161,8 +161,7 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) for contribution guidelines.
 
 ## Repository status
 
-This repository is still being organized and is not yet ready for general use or distribution. It has not been released under an open-source license. Unless an explicit license is added, all rights are reserved, and no permission is granted to use, copy, modify, or distribute any part of this repository.
-
+This repository is still being organized, and the author will continue to improve and supplement its contents. It is not yet ready for general use or distribution and has not been released under an open-source license. Unless an explicit license is added, all rights are reserved, and no permission is granted to use, copy, modify, or distribute any part of this repository.
 
 ## Acknowledgments
 
