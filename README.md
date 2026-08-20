@@ -159,20 +159,14 @@ bash -n train_accelerate.sh infer_with_spk.sh
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for contribution guidelines.
 
-## Known limitations
+## Repository status
 
-- The repository does not include a complete end-to-end test dataset. CI runs
-  only static checks that do not require model weights.
-- The legacy discriminator directory still contains historical interfaces and
-  script paths that have not all been migrated to package-relative imports.
-- Components such as TensorRT and SageAttention depend heavily on the local
-  CUDA toolkit and compiler and are not included in the default dependencies.
-- The repository currently has no explicit root-level license. The project
-  owner should add licensing terms before the project is used or distributed.
+This repository is still being organized and is not yet ready for general use or distribution. It has not been released under an open-source license. Unless an explicit license is added, all rights are reserved, and no permission is granted to use, copy, modify, or distribute any part of this repository.
+
 
 ## Acknowledgments
 
-Parts of the training and inference structure were inspired by
+Parts of the training and inference structure were copied from
 [ZFTurbo/Music-Source-Separation-Training](https://github.com/ZFTurbo/Music-Source-Separation-Training).
 Third-party copyright and license notices retained in individual source files
 continue to apply.
