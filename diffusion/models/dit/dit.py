@@ -14,20 +14,24 @@ import torch.nn as nn
 from .utils import to_2tuple, default, exists
 from .operator_utils import nchw_to, Format
 from .attention_utils import Attention
+
 try:
     from torch import _assert
 except ImportError:
+
     def _assert(condition: bool, message: str):
         assert condition, message
+
+
 from .conditioner import TimestepEmbedder, LabelEmbedder, TextEmbedder
 
 from ..registry import register_diffusion_model
 #################################################################################
-#                                   DiT Configs                                  
+#                                   DiT Configs
 # DiT_XL_2: DiT(depth=28, hidden_size=1152, patch_size=2, num_heads=16, **kwargs)
 
 # DiT_XL_4: DiT(depth=28, hidden_size=1152, patch_size=4, num_heads=16, **kwargs)
-        
+
 # DiT_XL_8: DiT(depth=28, hidden_size=1152, patch_size=8, num_heads=16, **kwargs)
 
 # DiT_L_2: DiT(depth=24, hidden_size=1024, patch_size=2, num_heads=16, **kwargs)
@@ -47,31 +51,33 @@ from ..registry import register_diffusion_model
 # DiT_S_4: DiT(depth=12, hidden_size=384, patch_size=4, num_heads=6, **kwargs)
 
 # DiT_S_8: DiT(depth=12, hidden_size=384, patch_size=8, num_heads=6, **kwargs)
-        
+
 #################################################################################
+
 
 def modulate(x, shift, scale):
     return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
 
+
 # ViT layers
 class PatchEmbed(nn.Module):
-    """ 2D Image to Patch Embedding
-    """
+    """2D Image to Patch Embedding"""
+
     output_fmt: Format
     dynamic_img_pad: torch.jit.Final[bool]
 
     def __init__(
-            self,
-            img_size: list = 224,
-            patch_size: list = 16,
-            in_chans: int = 3,
-            embed_dim: int = 768,
-            norm_layer: Optional[Callable] = None,
-            flatten: bool = True,
-            output_fmt: Optional[str] = None,
-            bias: bool = True,
-            strict_img_size: bool = True,
-            dynamic_img_pad: bool = False,
+        self,
+        img_size: list = 224,
+        patch_size: list = 16,
+        in_chans: int = 3,
+        embed_dim: int = 768,
+        norm_layer: Optional[Callable] = None,
+        flatten: bool = True,
+        output_fmt: Optional[str] = None,
+        bias: bool = True,
+        strict_img_size: bool = True,
+        dynamic_img_pad: bool = False,
     ):
         super().__init__()
         self.patch_size = patch_size
@@ -94,23 +100,31 @@ class PatchEmbed(nn.Module):
         self.strict_img_size = strict_img_size
         self.dynamic_img_pad = dynamic_img_pad
 
-        self.proj = nn.Conv2d(in_chans, embed_dim, kernel_size=patch_size, stride=patch_size, bias=bias)
+        self.proj = nn.Conv2d(
+            in_chans, embed_dim, kernel_size=patch_size, stride=patch_size, bias=bias
+        )
         self.norm = norm_layer(embed_dim) if norm_layer else nn.Identity()
 
     def forward(self, x):
         _, _, H, W = x.shape
         if self.img_size is not None:
             if self.strict_img_size:
-                _assert(H == self.img_size[0], f"Input height ({H}) doesn't match model ({self.img_size[0]}).")
-                _assert(W == self.img_size[1], f"Input width ({W}) doesn't match model ({self.img_size[1]}).")
+                _assert(
+                    H == self.img_size[0],
+                    f"Input height ({H}) doesn't match model ({self.img_size[0]}).",
+                )
+                _assert(
+                    W == self.img_size[1],
+                    f"Input width ({W}) doesn't match model ({self.img_size[1]}).",
+                )
             elif not self.dynamic_img_pad:
                 _assert(
                     H % self.patch_size[0] == 0,
-                    f"Input height ({H}) should be divisible by patch size ({self.patch_size[0]})."
+                    f"Input height ({H}) should be divisible by patch size ({self.patch_size[0]}).",
                 )
                 _assert(
                     W % self.patch_size[1] == 0,
-                    f"Input width ({W}) should be divisible by patch size ({self.patch_size[1]})."
+                    f"Input width ({W}) should be divisible by patch size ({self.patch_size[1]}).",
                 )
         if self.dynamic_img_pad:
             pad_h = (self.patch_size[0] - H % self.patch_size[0]) % self.patch_size[0]
@@ -123,20 +137,21 @@ class PatchEmbed(nn.Module):
             x = nchw_to(x, self.output_fmt)
         x = self.norm(x)
         return x
-    
+
+
 class Mlp(nn.Module):
-    """ MLP as used in Vision Transformer, MLP-Mixer and related networks
-    """
+    """MLP as used in Vision Transformer, MLP-Mixer and related networks"""
+
     def __init__(
-            self,
-            in_features,
-            hidden_features=None,
-            out_features=None,
-            act_layer=nn.GELU,
-            norm_layer=None,
-            bias=True,
-            drop=0.,
-            use_conv=False,
+        self,
+        in_features,
+        hidden_features=None,
+        out_features=None,
+        act_layer=nn.GELU,
+        norm_layer=None,
+        bias=True,
+        drop=0.0,
+        use_conv=False,
     ):
         super().__init__()
         out_features = out_features or in_features
@@ -161,10 +176,12 @@ class Mlp(nn.Module):
         x = self.drop2(x)
         return x
 
+
 #################################################################################
 #                   Sine/Cosine Positional Embedding Functions                  #
 #################################################################################
 # https://github.com/facebookresearch/mae/blob/main/util/pos_embed.py
+
 
 def get_2d_sincos_pos_embed(embed_dim, grid_size, cls_token=False, extra_tokens=0):
     """
@@ -191,8 +208,9 @@ def get_2d_sincos_pos_embed_from_grid(embed_dim, grid):
     emb_h = get_1d_sincos_pos_embed_from_grid(embed_dim // 2, grid[0])  # (H*W, D/2)
     emb_w = get_1d_sincos_pos_embed_from_grid(embed_dim // 2, grid[1])  # (H*W, D/2)
 
-    emb = np.concatenate([emb_h, emb_w], axis=1) # (H*W, D)
+    emb = np.concatenate([emb_h, emb_w], axis=1)  # (H*W, D)
     return emb
+
 
 def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
     """
@@ -202,56 +220,66 @@ def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
     """
     assert embed_dim % 2 == 0
     omega = np.arange(embed_dim // 2, dtype=np.float64)
-    omega /= embed_dim / 2.
-    omega = 1. / 10000**omega  # (D/2,)
+    omega /= embed_dim / 2.0
+    omega = 1.0 / 10000**omega  # (D/2,)
 
     pos = pos.reshape(-1)  # (M,)
-    out = np.einsum('m,d->md', pos, omega)  # (M, D/2), outer product
+    out = np.einsum("m,d->md", pos, omega)  # (M, D/2), outer product
 
-    emb_sin = np.sin(out) # (M, D/2)
-    emb_cos = np.cos(out) # (M, D/2)
+    emb_sin = np.sin(out)  # (M, D/2)
+    emb_cos = np.cos(out)  # (M, D/2)
 
     emb = np.concatenate([emb_sin, emb_cos], axis=1)  # (M, D)
     return emb
-    
+
+
 #################################################################################
 #                                 Core DiT Model                                #
 #################################################################################
+
 
 class DiTBlock(nn.Module):
     """
     A DiT block with adaptive layer norm zero (adaLN-Zero) conditioning.
     """
-    def __init__(self, hidden_size, 
-                 num_heads, mlp_ratio=4.0, 
-                 use_self_text_cond=True,
-                 use_qk_l2norm=False, use_rope=True):
+
+    def __init__(
+        self,
+        hidden_size,
+        num_heads,
+        mlp_ratio=4.0,
+        use_self_text_cond=True,
+        use_qk_l2norm=False,
+        use_rope=True,
+    ):
         super().__init__()
         self.norm1 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
-        self.attn = Attention(dim=hidden_size, 
-                              heads=num_heads,
-                              context_dim=hidden_size, 
-                              use_self_text_cond=use_self_text_cond,
-                              use_qk_l2norm=use_qk_l2norm,
-                              use_rope=use_rope)
-        
+        self.attn = Attention(
+            dim=hidden_size,
+            heads=num_heads,
+            context_dim=hidden_size,
+            use_self_text_cond=use_self_text_cond,
+            use_qk_l2norm=use_qk_l2norm,
+            use_rope=use_rope,
+        )
+
         self.norm2 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         mlp_hidden_dim = int(hidden_size * mlp_ratio)
         approx_gelu = lambda: nn.GELU(approximate="tanh")
-        self.mlp = Mlp(in_features=hidden_size, 
-                       hidden_features=mlp_hidden_dim, 
-                       act_layer=approx_gelu, drop=0)
+        self.mlp = Mlp(
+            in_features=hidden_size, hidden_features=mlp_hidden_dim, act_layer=approx_gelu, drop=0
+        )
         self.adaLN_modulation = nn.Sequential(
-            nn.SiLU(),
-            nn.Linear(hidden_size, 6 * hidden_size, bias=True)
+            nn.SiLU(), nn.Linear(hidden_size, 6 * hidden_size, bias=True)
         )
 
-    def forward(self, x, c, 
-                context=None, 
-                context_mask=None):
-        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(6, dim=1)
-        x = x + gate_msa.unsqueeze(1) * self.attn(modulate(self.norm1(x), shift_msa, scale_msa), 
-                                                  context, context_mask)
+    def forward(self, x, c, context=None, context_mask=None):
+        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(
+            c
+        ).chunk(6, dim=1)
+        x = x + gate_msa.unsqueeze(1) * self.attn(
+            modulate(self.norm1(x), shift_msa, scale_msa), context, context_mask
+        )
         x = x + gate_mlp.unsqueeze(1) * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
         return x
 
@@ -260,13 +288,13 @@ class FinalLayer(nn.Module):
     """
     The final layer of DiT.
     """
+
     def __init__(self, hidden_size, patch_size, out_channels):
         super().__init__()
         self.norm_final = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         self.linear = nn.Linear(hidden_size, np.prod(patch_size) * out_channels, bias=True)
         self.adaLN_modulation = nn.Sequential(
-            nn.SiLU(),
-            nn.Linear(hidden_size, 2 * hidden_size, bias=True)
+            nn.SiLU(), nn.Linear(hidden_size, 2 * hidden_size, bias=True)
         )
 
     def forward(self, x, c):
@@ -276,11 +304,12 @@ class FinalLayer(nn.Module):
         return x
 
 
-@register_diffusion_model('dit')
+@register_diffusion_model("dit")
 class DiT(nn.Module):
     """
     Diffusion model with a Transformer backbone.
     """
+
     def __init__(
         self,
         # input_size=[1025, 690],
@@ -312,20 +341,36 @@ class DiT(nn.Module):
         self.num_classes = num_classes
         self.label_cond = label_cond
 
-        self.x_embedder = PatchEmbed(self.input_size, self.patch_size, in_channels, hidden_size, bias=True)
+        self.x_embedder = PatchEmbed(
+            self.input_size, self.patch_size, in_channels, hidden_size, bias=True
+        )
         self.t_embedder = TimestepEmbedder(hidden_size, hidden_size)
-        self.y_embedder = LabelEmbedder(num_classes, class_embed_dim, hidden_size, hidden_size) if label_cond else None
-        self.text_conditioner = TextEmbedder(hidden_size, text_embed_dim, max_text_len) if text_cond else None
+        self.y_embedder = (
+            LabelEmbedder(num_classes, class_embed_dim, hidden_size, hidden_size)
+            if label_cond
+            else None
+        )
+        self.text_conditioner = (
+            TextEmbedder(hidden_size, text_embed_dim, max_text_len) if text_cond else None
+        )
 
         num_patches = self.x_embedder.num_patches
         # Fixed sin-cos embedding:
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, hidden_size), requires_grad=False)
 
-        self.blocks = nn.ModuleList([
-            DiTBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio, 
-                     use_self_text_cond=use_self_text_cond,
-                     use_qk_l2norm=use_qk_l2norm, use_rope=True) for _ in range(depth)
-        ])
+        self.blocks = nn.ModuleList(
+            [
+                DiTBlock(
+                    hidden_size,
+                    num_heads,
+                    mlp_ratio=mlp_ratio,
+                    use_self_text_cond=use_self_text_cond,
+                    use_qk_l2norm=use_qk_l2norm,
+                    use_rope=True,
+                )
+                for _ in range(depth)
+            ]
+        )
         self.final_layer = FinalLayer(hidden_size, self.patch_size, self.out_channels)
         self.initialize_weights()
 
@@ -336,6 +381,7 @@ class DiT(nn.Module):
                 torch.nn.init.xavier_uniform_(module.weight)
                 if module.bias is not None:
                     nn.init.constant_(module.bias, 0)
+
         self.apply(_basic_init)
 
         # Initialize (and freeze) pos_embed by sin-cos embedding:
@@ -379,17 +425,20 @@ class DiT(nn.Module):
         w = self.input_size[1] // p2
 
         x = x.reshape(shape=(x.shape[0], h, w, p1, p2, c))
-        x = torch.einsum('nhwpqc->nchpwq', x)
+        x = torch.einsum("nhwpqc->nchpwq", x)
         imgs = x.reshape(shape=(x.shape[0], c, h * p1, w * p2))
         return imgs
 
-    def forward(self, 
-                x: Tensor, 
-                t: Tensor, 
-                classes:Optional[Tensor] = None,         # class labels or class embeddings
-                text_embeds:Optional[Tensor] = None,         # text embeddings
-                text_mask:Optional[Tensor] = None,  
-                cond_drop_prob=None, **kwargs):
+    def forward(
+        self,
+        x: Tensor,
+        t: Tensor,
+        classes: Optional[Tensor] = None,  # class labels or class embeddings
+        text_embeds: Optional[Tensor] = None,  # text embeddings
+        text_mask: Optional[Tensor] = None,
+        cond_drop_prob=None,
+        **kwargs,
+    ):
         """
         Forward pass of DiT.
         x: (N, C, F, T) tensor of spatial inputs (images or latent representations of images)
@@ -405,27 +454,26 @@ class DiT(nn.Module):
         cond_drop_prob = default(cond_drop_prob, self.cond_drop_prob)
 
         x = self.x_embedder(x) + self.pos_embed  # (N, T, D), where T = H * W / patch_size ** 2
-        t = self.t_embedder(t)                   # (N, D)
+        t = self.t_embedder(t)  # (N, D)
 
         if exists(classes):
-            c = self.y_embedder(classes, cond_drop_prob)    # (N, D) 
+            c = self.y_embedder(classes, cond_drop_prob)  # (N, D)
             c = c + t
         else:
             c = t
 
         # text condition
         if exists(text_embeds):
-            context, text_mask = self.text_conditioner(text_embeds, text_mask, cond_drop_prob) 
+            context, text_mask = self.text_conditioner(text_embeds, text_mask, cond_drop_prob)
         else:
             context = None
             text_mask = None
-        
 
         for block in self.blocks:
-            x = block(x, c, context, text_mask)                      # (N, T, D)
+            x = block(x, c, context, text_mask)  # (N, T, D)
 
-        x = self.final_layer(x, c)                # (N, T, patch_size[0] * patch_size[1] * out_channels)
-        x = self.unpatchify(x)                   # (N, out_channels, H, W)
+        x = self.final_layer(x, c)  # (N, T, patch_size[0] * patch_size[1] * out_channels)
+        x = self.unpatchify(x)  # (N, out_channels, H, W)
 
         if input_dim == 3:
             x = x.squeeze(2)

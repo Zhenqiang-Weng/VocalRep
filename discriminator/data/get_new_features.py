@@ -1,4 +1,4 @@
-## 可参考  https://github.com/keonlee9420/PortaSpeech/blob/main/preprocessor/preprocessor.py
+## See  https://github.com/keonlee9420/PortaSpeech/blob/main/preprocessor/preprocessor.py
 import numpy as np
 from scipy.stats import  betabinom
 import os
@@ -18,5 +18,4 @@ def beta_binomial_prior_distribution(phoneme_count, mel_count, scaling_factor=1.
 mel = np.load('mel.npy')
 duration = np.load('dur.npy')
 attn_prior = beta_binomial_prior_distribution(mel.shape[1],len(duration),1)
-
 

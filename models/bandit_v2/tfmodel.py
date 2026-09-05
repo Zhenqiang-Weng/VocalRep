@@ -38,9 +38,7 @@ class ResidualRNN(nn.Module):
             bidirectional=bidirectional,
         )
 
-        self.fc = nn.Linear(
-            in_features=rnn_dim * (2 if bidirectional else 1), out_features=emb_dim
-        )
+        self.fc = nn.Linear(in_features=rnn_dim * (2 if bidirectional else 1), out_features=emb_dim)
 
         self.use_batch_trick = use_batch_trick
         if not self.use_batch_trick:
@@ -137,9 +135,7 @@ class SeqBandModellingModule(TimeFrequencyModellingModule):
                 zf = sbm_f(z.transpose(1, 2))  # (batch, n_time, n_bands, emb_dim)
                 z = zt + zf.transpose(1, 2)
         else:
-            z = checkpoint_sequential(
-                self.seqband, self.n_modules, z, use_reentrant=False
-            )
+            z = checkpoint_sequential(self.seqband, self.n_modules, z, use_reentrant=False)
 
         q = z
         return q  # (batch, n_bands, n_time, emb_dim)

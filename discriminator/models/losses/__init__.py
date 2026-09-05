@@ -7,35 +7,45 @@ from .pytorch_ssim import ssim_loss
 
 def mask(shape, lengths, dim=-1):
 
-    assert dim != 0, 'Masking not available for batch dimension'
-    assert len(lengths) == shape[0], 'Lengths must contain as many elements as there are items in the batch'
+    assert dim != 0, "Masking not available for batch dimension"
+    assert len(lengths) == shape[0], (
+        "Lengths must contain as many elements as there are items in the batch"
+    )
 
     lengths = torch.as_tensor(lengths)
 
-    to_expand = [1] * (len(shape)-1)+[-1]
-    mask = torch.arange(shape[dim]).expand(to_expand).transpose(dim, -1).expand(shape).to(lengths.device)
+    to_expand = [1] * (len(shape) - 1) + [-1]
+    mask = (
+        torch.arange(shape[dim])
+        .expand(to_expand)
+        .transpose(dim, -1)
+        .expand(shape)
+        .to(lengths.device)
+    )
     mask = mask < lengths.expand(to_expand).transpose(0, -1)
     return mask
+
 
 class MaskdMSE(torch.nn.Module):
     def __init__(self):
         super(MaskdMSE, self).__init__()
-        self.mse = torch.nn.MSELoss(reduction='sum')
+        self.mse = torch.nn.MSELoss(reduction="sum")
 
     def forward(self, input, target, lengths):
 
         m = mask(input.shape, lengths, dim=1).float().to(input.device)
         return self.mse(input * m, target * m) / m.sum()
 
+
 def masked_mse(input, target, lengths):
     m = mask(input.shape, lengths, dim=1).float().to(input.device)
-    return F.mse_loss(input * m, target * m, reduction='sum') / m.sum()
+    return F.mse_loss(input * m, target * m, reduction="sum") / m.sum()
 
 
 class MaskdMAE(torch.nn.Module):
     def __init__(self):
         super(MaskdMAE, self).__init__()
-        self.mae = torch.nn.L1Loss(reduction='sum')
+        self.mae = torch.nn.L1Loss(reduction="sum")
 
     def forward(self, input, target, lengths):
         m = mask(input.shape, lengths, dim=1).float().to(input.device)
@@ -44,8 +54,7 @@ class MaskdMAE(torch.nn.Module):
 
 def masked_mae(input, target, lengths):
     m = mask(input.shape, lengths, dim=1).float().to(input.device)
-    return F.l1_loss(input * m, target * m, reduction='sum') / m.sum()
-
+    return F.l1_loss(input * m, target * m, reduction="sum") / m.sum()
 
 
 def dtw(input, ilen, target, tlen, pow=1.0):
@@ -63,7 +72,7 @@ def dtw(input, ilen, target, tlen, pow=1.0):
     total_elem = 0
     for i, t in zip(input, target):
         dtw, path = fastdtw(i.cpu(), t.cpu(), dist=lambda x, y: np.abs(x - y).sum())
-        s += dtw ** pow
+        s += dtw**pow
         if len(i) > len(t):
             total_elem += i.numel()
         else:
@@ -92,9 +101,10 @@ class GuidedAttentionLoss(torch.nn.Module):
         y, x = torch.as_tensor(np.mgrid[0:T, 0:N]).float().to(attention_weights.device)
 
         t, n = torch.as_tensor(len_rows).float(), torch.as_tensor(len_cols).float()
-        penalty = \
-            1 - torch.exp(-(y[None, :, :] / t[:, None, None]
-                            - x[None, :, :] / n[:, None, None]) ** 2 / (2 * self.sigma ** 2))
+        penalty = 1 - torch.exp(
+            -((y[None, :, :] / t[:, None, None] - x[None, :, :] / n[:, None, None]) ** 2)
+            / (2 * self.sigma**2)
+        )
 
         mask = (y[None, :, :] < t[:, None, None]) * (x[None, :, :] < n[:, None, None])
         penalty = penalty.masked_fill(~mask, 0).to(attention_weights.device)
@@ -102,10 +112,9 @@ class GuidedAttentionLoss(torch.nn.Module):
         l = penalty * attention_weights
         l = torch.sum(torch.sum(l, dim=-1), dim=-1)  # sum each frame
         l /= torch.as_tensor(n * t).to(
-            attention_weights.device)  # divide each frame sum by total number of nonzero elements in the frame
+            attention_weights.device
+        )  # divide each frame sum by total number of nonzero elements in the frame
         return torch.mean(l)
-
-
 
 
 def guided_attention(attention_weights, len_rows, len_cols, sigma=0.2):
@@ -121,9 +130,10 @@ def guided_attention(attention_weights, len_rows, len_cols, sigma=0.2):
     y, x = torch.as_tensor(np.mgrid[0:T, 0:N]).float().to(attention_weights.device)
 
     t, n = torch.as_tensor(len_rows).float(), torch.as_tensor(len_cols).float()
-    penalty = \
-        1 - torch.exp(-(y[None, :, :] / t[:, None, None]
-                        - x[None, :, :] / n[:, None, None]) ** 2 / (2 * sigma ** 2))
+    penalty = 1 - torch.exp(
+        -((y[None, :, :] / t[:, None, None] - x[None, :, :] / n[:, None, None]) ** 2)
+        / (2 * sigma**2)
+    )
 
     mask = (y[None, :, :] < t[:, None, None]) * (x[None, :, :] < n[:, None, None])
     penalty = penalty.masked_fill(~mask, 0).to(attention_weights.device)
@@ -131,7 +141,8 @@ def guided_attention(attention_weights, len_rows, len_cols, sigma=0.2):
     l = penalty * attention_weights
     l = torch.sum(torch.sum(l, dim=-1), dim=-1)  # sum each frame
     l /= torch.as_tensor(n * t).to(
-        attention_weights.device)  # divide each frame sum by total number of nonzero elements in the frame
+        attention_weights.device
+    )  # divide each frame sum by total number of nonzero elements in the frame
     return torch.mean(l)
 
 
@@ -140,7 +151,7 @@ def logit(x, eps=1e-8):
 
 
 def binary_divergence_masked(input, target, lengths):
-    """ Provides non-vanishing gradient, but does not equal zero if spectrograms are the same
+    """Provides non-vanishing gradient, but does not equal zero if spectrograms are the same
     Inspired by https://github.com/r9y9/deepvoice3_pytorch/blob/897f31e57eb6ec2f0cafa8dc62968e60f6a96407/train.py#L537
     """
 
@@ -166,14 +177,19 @@ def masked_huber(input, target, lengths):
     :return:
     """
     m = mask(input.shape, lengths, dim=1).float().to(input.device)
-    return F.smooth_l1_loss(input * m, target * m, reduction='sum') / m.sum()
+    return F.smooth_l1_loss(input * m, target * m, reduction="sum") / m.sum()
 
 
 def masked_ssim(input, target, lengths, window_size=11):
     m = mask(input.shape, lengths, dim=1).float().to(input.device)
     input, target = input * m, target * m
-    return ssim_loss(input.unsqueeze(1), target.unsqueeze(1), window_size=window_size,reduction='sum') / m.sum()
+    return (
+        ssim_loss(input.unsqueeze(1), target.unsqueeze(1), window_size=window_size, reduction="sum")
+        / m.sum()
+    )
+
+
 def masked_nll(input, target, lengths):
     m = mask(input.shape, lengths, dim=1).float().to(input.device)
     target.masked_fill(~m.bool(), -100)
-    return F.nll_loss(input, target, redution='sum') / m.sum()
+    return F.nll_loss(input, target, redution="sum") / m.sum()

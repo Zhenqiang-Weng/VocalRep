@@ -7,6 +7,7 @@ import torch.nn.functional as F
 
 from models.bs_roformer.attend import Attend
 from models.bs_roformer.conditioner import BandEmbedder
+
 try:
     from models.bs_roformer.attend_sage import Attend as AttendSage
 except:
@@ -19,6 +20,7 @@ from rotary_embedding_torch import RotaryEmbedding
 
 # helper functions
 
+
 def exists(val):
     return val is not None
 
@@ -29,14 +31,15 @@ def default(v, d):
 
 # norm
 
+
 def l2norm(t):
-    return F.normalize(t, dim = -1, p = 2)
+    return F.normalize(t, dim=-1, p=2)
 
 
 class RMSNorm(Module):
     def __init__(self, dim):
         super().__init__()
-        self.scale = dim ** 0.5
+        self.scale = dim**0.5
         self.gamma = nn.Parameter(torch.ones(dim))
 
     def forward(self, x):
@@ -46,10 +49,11 @@ class RMSNorm(Module):
 # Custom layer to replace Rearrange for QKV split
 class RearrangeQKV(Module):
     """Replace einops Rearrange('b n (qkv h d) -> qkv b h d n', qkv=3, h=heads)"""
+
     def __init__(self, heads):
         super().__init__()
         self.heads = heads
-    
+
     def forward(self, x):
         # x: (b, n, qkv * h * d)
         b, n, _ = x.shape
@@ -62,9 +66,10 @@ class RearrangeQKV(Module):
 
 class RearrangeOut(Module):
     """Replace einops Rearrange('b h d n -> b n (h d)')"""
+
     def __init__(self):
         super().__init__()
-    
+
     def forward(self, x):
         # x: (b, h, d, n)
         b, h, d, n = x.shape
@@ -74,13 +79,9 @@ class RearrangeOut(Module):
 
 # attention
 
+
 class FeedForward(Module):
-    def __init__(
-            self,
-            dim,
-            mult=4,
-            dropout=0.
-    ):
+    def __init__(self, dim, mult=4, dropout=0.0):
         super().__init__()
         dim_inner = int(dim * mult)
         self.net = nn.Sequential(
@@ -89,7 +90,7 @@ class FeedForward(Module):
             nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(dim_inner, dim),
-            nn.Dropout(dropout)
+            nn.Dropout(dropout),
         )
 
     def forward(self, x):
@@ -98,19 +99,19 @@ class FeedForward(Module):
 
 class Attention(Module):
     def __init__(
-            self,
-            dim,
-            heads=8,
-            dim_head=64,
-            dropout=0.,
-            rotary_embed=None,
-            flash=True,
-            sage_attention=False,
+        self,
+        dim,
+        heads=8,
+        dim_head=64,
+        dropout=0.0,
+        rotary_embed=None,
+        flash=True,
+        sage_attention=False,
     ):
         super().__init__()
         self.heads = heads
         self.dim_head = dim_head
-        self.scale = dim_head ** -0.5
+        self.scale = dim_head**-0.5
         dim_inner = heads * dim_head
 
         self.rotary_embed = rotary_embed
@@ -125,10 +126,7 @@ class Attention(Module):
 
         self.to_gates = nn.Linear(dim, heads)
 
-        self.to_out = nn.Sequential(
-            nn.Linear(dim_inner, dim, bias=False),
-            nn.Dropout(dropout)
-        )
+        self.to_out = nn.Sequential(nn.Linear(dim_inner, dim, bias=False), nn.Dropout(dropout))
 
     def forward(self, x):
         x = self.norm(x)
@@ -163,15 +161,15 @@ class LinearAttention(Module):
 
     @beartype
     def __init__(
-            self,
-            *,
-            dim,
-            dim_head=32,
-            heads=8,
-            scale=8,
-            flash=False,
-            dropout=0.,
-            sage_attention=False,
+        self,
+        *,
+        dim,
+        dim_head=32,
+        heads=8,
+        scale=8,
+        flash=False,
+        dropout=0.0,
+        sage_attention=False,
     ):
         super().__init__()
         self.heads = heads
@@ -184,17 +182,9 @@ class LinearAttention(Module):
         self.temperature = nn.Parameter(torch.ones(heads, 1, 1))
 
         if sage_attention:
-            self.attend = AttendSage(
-                scale=scale,
-                dropout=dropout,
-                flash=flash
-            )
+            self.attend = AttendSage(scale=scale, dropout=dropout, flash=flash)
         else:
-            self.attend = Attend(
-                scale=scale,
-                dropout=dropout,
-                flash=flash
-            )
+            self.attend = Attend(scale=scale, dropout=dropout, flash=flash)
 
         self.to_out_linear = nn.Linear(dim_inner, dim, bias=False)
 
@@ -220,20 +210,20 @@ class LinearAttention(Module):
 
 class Transformer(Module):
     def __init__(
-            self,
-            *,
-            dim,
-            depth,
-            dim_head=64,
-            heads=8,
-            attn_dropout=0.,
-            ff_dropout=0.,
-            ff_mult=4,
-            norm_output=True,
-            rotary_embed=None,
-            flash_attn=True,
-            linear_attn=False,
-            sage_attention=False,
+        self,
+        *,
+        dim,
+        depth,
+        dim_head=64,
+        heads=8,
+        attn_dropout=0.0,
+        ff_dropout=0.0,
+        ff_mult=4,
+        norm_output=True,
+        rotary_embed=None,
+        flash_attn=True,
+        linear_attn=False,
+        sage_attention=False,
     ):
         super().__init__()
         self.layers = ModuleList([])
@@ -246,7 +236,7 @@ class Transformer(Module):
                     heads=heads,
                     dropout=attn_dropout,
                     flash=flash_attn,
-                    sage_attention=sage_attention
+                    sage_attention=sage_attention,
                 )
             else:
                 attn = Attention(
@@ -256,13 +246,12 @@ class Transformer(Module):
                     dropout=attn_dropout,
                     rotary_embed=rotary_embed,
                     flash=flash_attn,
-                    sage_attention=sage_attention
+                    sage_attention=sage_attention,
                 )
 
-            self.layers.append(ModuleList([
-                attn,
-                FeedForward(dim=dim, mult=ff_mult, dropout=ff_dropout)
-            ]))
+            self.layers.append(
+                ModuleList([attn, FeedForward(dim=dim, mult=ff_mult, dropout=ff_dropout)])
+            )
 
         self.norm = RMSNorm(dim) if norm_output else nn.Identity()
 
@@ -275,33 +264,32 @@ class Transformer(Module):
         return self.norm(x)
 
 
-                
 def modulate(x, shift, scale):
     return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
 
 
 class ScaleTransformer(Module):
     def __init__(
-            self,
-            *,
-            dim,
-            depth,
-            dim_head=64,
-            heads=8,
-            attn_dropout=0.,
-            ff_dropout=0.,
-            ff_mult=4,
-            norm_output=True,
-            rotary_embed=None,
-            flash_attn=True,
-            linear_attn=False,
-            sage_attention=False,
+        self,
+        *,
+        dim,
+        depth,
+        dim_head=64,
+        heads=8,
+        attn_dropout=0.0,
+        ff_dropout=0.0,
+        ff_mult=4,
+        norm_output=True,
+        rotary_embed=None,
+        flash_attn=True,
+        linear_attn=False,
+        sage_attention=False,
     ):
         super().__init__()
         self.layers = ModuleList([])
-        self.adaLN_modulations = nn.ModuleList([]) 
+        self.adaLN_modulations = nn.ModuleList([])
         self.norm = RMSNorm(dim) if norm_output else nn.Identity()
-        
+
         for _ in range(depth):
             norm1 = nn.LayerNorm(dim, elementwise_affine=False, eps=1e-6)
             if linear_attn:
@@ -311,7 +299,7 @@ class ScaleTransformer(Module):
                     heads=heads,
                     dropout=attn_dropout,
                     flash=flash_attn,
-                    sage_attention=sage_attention
+                    sage_attention=sage_attention,
                 )
             else:
                 attn = Attention(
@@ -321,24 +309,23 @@ class ScaleTransformer(Module):
                     dropout=attn_dropout,
                     rotary_embed=rotary_embed,
                     flash=flash_attn,
-                    sage_attention=sage_attention
+                    sage_attention=sage_attention,
                 )
 
             norm2 = nn.LayerNorm(dim, elementwise_affine=False, eps=1e-6)
-            self.layers.append(ModuleList([
-                norm1,
-                attn,
-                norm2,
-                FeedForward(dim=dim, mult=ff_mult, dropout=ff_dropout)
-            ]))
-            
+            self.layers.append(
+                ModuleList(
+                    [norm1, attn, norm2, FeedForward(dim=dim, mult=ff_mult, dropout=ff_dropout)]
+                )
+            )
+
             ada = nn.Sequential(
                 nn.SELU(),
                 nn.Linear(dim, 6 * dim, bias=True),
             )
             self.adaLN_modulations.append(ada)
         self.init_weights()
-            
+
     def forward(self, x, band_embedding=None):
         # x: (b*f, t, d)
         # band_embedding: (b*f, d)
@@ -347,11 +334,13 @@ class ScaleTransformer(Module):
 
         for (norm1, attn, norm2, ff), ada in zip(self.layers, self.adaLN_modulations):
             shift_scale = ada(band_embedding)
-            shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = shift_scale.chunk(6, dim=-1)
+            shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = shift_scale.chunk(
+                6, dim=-1
+            )
             x = x + attn(modulate(norm1(x), shift_msa, scale_msa)) * gate_msa.unsqueeze(1)
             x = x + ff(modulate(norm2(x), shift_mlp, scale_mlp)) * gate_mlp.unsqueeze(1)
         return self.norm(x)
-    
+
     def init_weights(self):
         """Initialize only adaLN_modulations."""
         GATE_BIAS_INIT = 1.0
@@ -364,28 +353,22 @@ class ScaleTransformer(Module):
 
             with torch.no_grad():
                 D = linear.bias.shape[0] // 6
-                linear.bias[2*D:3*D].fill_(GATE_BIAS_INIT)
-                linear.bias[5*D:6*D].fill_(GATE_BIAS_INIT)
+                linear.bias[2 * D : 3 * D].fill_(GATE_BIAS_INIT)
+                linear.bias[5 * D : 6 * D].fill_(GATE_BIAS_INIT)
 
 
 # bandsplit module
 
+
 class BandSplit(Module):
     @beartype
-    def __init__(
-            self,
-            dim,
-            dim_inputs: Tuple[int, ...]
-    ):
+    def __init__(self, dim, dim_inputs: Tuple[int, ...]):
         super().__init__()
         self.dim_inputs = dim_inputs
         self.to_features = ModuleList([])
 
         for dim_in in dim_inputs:
-            net = nn.Sequential(
-                RMSNorm(dim_in),
-                nn.Linear(dim_in, dim)
-            )
+            net = nn.Sequential(RMSNorm(dim_in), nn.Linear(dim_in, dim))
 
             self.to_features.append(net)
 
@@ -400,13 +383,7 @@ class BandSplit(Module):
         return torch.stack(outs, dim=-2)
 
 
-def MLP(
-        dim_in,
-        dim_out,
-        dim_hidden=None,
-        depth=1,
-        activation=nn.Tanh
-):
+def MLP(dim_in, dim_out, dim_hidden=None, depth=1, activation=nn.Tanh):
     dim_hidden = default(dim_hidden, dim_in)
 
     net = []
@@ -427,13 +404,7 @@ def MLP(
 
 class MaskEstimator(Module):
     @beartype
-    def __init__(
-            self,
-            dim,
-            dim_inputs: Tuple[int, ...],
-            depth,
-            mlp_expansion_factor=4
-    ):
+    def __init__(self, dim, dim_inputs: Tuple[int, ...], depth, mlp_expansion_factor=4):
         super().__init__()
         self.dim_inputs = dim_inputs
         self.to_freqs = ModuleList([])
@@ -441,8 +412,7 @@ class MaskEstimator(Module):
 
         for dim_in in dim_inputs:
             mlp = nn.Sequential(
-                MLP(dim, dim_in * 2, dim_hidden=dim_hidden, depth=depth),
-                nn.GLU(dim=-1)
+                MLP(dim, dim_in * 2, dim_hidden=dim_hidden, depth=depth), nn.GLU(dim=-1)
             )
 
             self.to_freqs.append(mlp)
@@ -462,43 +432,95 @@ class MaskEstimator(Module):
 # main class
 
 DEFAULT_FREQS_PER_BANDS = (
-    2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
-    2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
-    2, 2, 2, 2,
-    4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
-    12, 12, 12, 12, 12, 12, 12, 12,
-    24, 24, 24, 24, 24, 24, 24, 24,
-    48, 48, 48, 48, 48, 48, 48, 48,
-    128, 129,
-)      
-    
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    4,
+    4,
+    4,
+    4,
+    4,
+    4,
+    4,
+    4,
+    4,
+    4,
+    4,
+    4,
+    12,
+    12,
+    12,
+    12,
+    12,
+    12,
+    12,
+    12,
+    24,
+    24,
+    24,
+    24,
+    24,
+    24,
+    24,
+    24,
+    48,
+    48,
+    48,
+    48,
+    48,
+    48,
+    48,
+    48,
+    128,
+    129,
+)
 
 
 class BDCSGBSRoformer(Module):
-
     @beartype
     def __init__(
-            self,
-            dim,
-            *,
-            depth,
-            freqs_per_bands: Tuple[int, ...] = DEFAULT_FREQS_PER_BANDS,
-            dim_head=64,
-            heads=8,
-            attn_dropout=0.,
-            ff_dropout=0.,
-            flash_attn=True,
-            dim_freqs_in=1025,
-            stft_n_fft=2048,
-            stft_hop_length=512,
-            stft_win_length=2048,
-            stft_normalized=False,
-            stft_window_fn: Optional[Callable] = None,
-            mask_estimator_depth=2,
-            mlp_expansion_factor=4,
-            skip_connection=False,
-            sage_attention=False,
-            spk_embd_dim=192,
+        self,
+        dim,
+        *,
+        depth,
+        freqs_per_bands: Tuple[int, ...] = DEFAULT_FREQS_PER_BANDS,
+        dim_head=64,
+        heads=8,
+        attn_dropout=0.0,
+        ff_dropout=0.0,
+        flash_attn=True,
+        dim_freqs_in=1025,
+        stft_n_fft=2048,
+        stft_hop_length=512,
+        stft_win_length=2048,
+        stft_normalized=False,
+        stft_window_fn: Optional[Callable] = None,
+        mask_estimator_depth=2,
+        mlp_expansion_factor=4,
+        skip_connection=False,
+        sage_attention=False,
+        spk_embd_dim=192,
     ):
         super().__init__()
 
@@ -532,14 +554,14 @@ class BDCSGBSRoformer(Module):
                 ScaleTransformer(
                     depth=1,  # Fixed to 1 for TensorRT
                     rotary_embed=time_rotary_embed,
-                    **transformer_kwargs
+                    **transformer_kwargs,
                 )
             )
             tran_modules.append(
                 ScaleTransformer(
                     depth=1,  # Fixed to 1 for TensorRT
                     rotary_embed=freq_rotary_embed,
-                    **transformer_kwargs
+                    **transformer_kwargs,
                 )
             )
             self.layers.append(nn.ModuleList(tran_modules))
@@ -554,23 +576,20 @@ class BDCSGBSRoformer(Module):
         # Register STFT window as buffer for TensorRT
         window_fn = default(stft_window_fn, torch.hann_window)
         stft_window = window_fn(stft_win_length)
-        self.register_buffer('stft_window', stft_window, persistent=True)
+        self.register_buffer("stft_window", stft_window, persistent=True)
 
         # Calculate freq bins
         freqs = stft_n_fft // 2 + 1  # 1025 for n_fft=2048
 
         assert len(freqs_per_bands) > 1
         assert sum(freqs_per_bands) == freqs, (
-            f'the number of freqs in the bands must equal {freqs} based on the STFT settings, '
-            f'but got {sum(freqs_per_bands)}'
+            f"the number of freqs in the bands must equal {freqs} based on the STFT settings, "
+            f"but got {sum(freqs_per_bands)}"
         )
 
         freqs_per_bands_with_complex = tuple(2 * f * self.audio_channels for f in freqs_per_bands)
 
-        self.band_split = BandSplit(
-            dim=dim,
-            dim_inputs=freqs_per_bands_with_complex
-        )
+        self.band_split = BandSplit(dim=dim, dim_inputs=freqs_per_bands_with_complex)
 
         self.mask_estimators = nn.ModuleList([])
         for _ in range(3):  # Fixed to 3 for TensorRT
@@ -590,7 +609,7 @@ class BDCSGBSRoformer(Module):
         self.register_buffer(
             "band_indices",
             torch.arange(len(self.freqs_per_bands), dtype=torch.long),
-            persistent=False
+            persistent=False,
         )
 
     def create_band_conditioning(self, batch_size: int, device: torch.device):
@@ -601,11 +620,13 @@ class BDCSGBSRoformer(Module):
             torch.Tensor: (batch_size * num_bands, dim)
         """
         band_cond = self.band_cond_embedding(self.band_indices.to(device))  # (num_bands, dim)
-        band_cond = band_cond.unsqueeze(0).expand(batch_size, -1, -1)       # (b, num_bands, dim)
+        band_cond = band_cond.unsqueeze(0).expand(batch_size, -1, -1)  # (b, num_bands, dim)
         band_cond = band_cond.reshape(batch_size * band_cond.shape[1], -1)  # (b*num_bands, dim)
         return band_cond
 
-    def create_speaker_conditioning_for_fre_roformer(self, speaker_embedding: Optional[Tensor], num_time_steps: int):
+    def create_speaker_conditioning_for_fre_roformer(
+        self, speaker_embedding: Optional[Tensor], num_time_steps: int
+    ):
         if speaker_embedding is None:
             return None
         speaker_embedding = self.spk_embd_to_dim(speaker_embedding)  # (b, d)
@@ -620,7 +641,7 @@ class BDCSGBSRoformer(Module):
         """
         Manual complex multiplication for TensorRT compatibility.
         Both tensors have shape (..., 2) where last dim is [real, imag]
-        
+
         (a + bi) * (c + di) = (ac - bd) + (ad + bc)i
         """
         s_real = stft_repr[..., 0]
@@ -630,13 +651,13 @@ class BDCSGBSRoformer(Module):
 
         res_real = s_real * m_real - s_imag * m_imag
         res_imag = s_real * m_imag + s_imag * m_real
-        
+
         return torch.stack([res_real, res_imag], dim=-1)
 
     def forward(
-            self,
-            raw_audio: Tensor,
-            speaker_embedding: Optional[Tensor] = None,
+        self,
+        raw_audio: Tensor,
+        speaker_embedding: Optional[Tensor] = None,
     ):
         """
         raw_audio: (b, 2, t) - always stereo (2 channels)
@@ -661,15 +682,15 @@ class BDCSGBSRoformer(Module):
             win_length=self.stft_win_length,
             window=stft_window,
             normalized=self.stft_normalized,
-            return_complex=True
+            return_complex=True,
         )
 
         # Convert complex to real: (b*2, f, t_stft) -> (b*2, f, t_stft, 2)
         stft_repr = torch.view_as_real(stft_repr)
-        
+
         freq_bins = stft_repr.shape[1]
         t_stft = stft_repr.shape[2]
-        
+
         # Reshape: (b*2, f, t_stft, 2) -> (b, 2, f, t_stft, 2)
         stft_repr = stft_repr.view(batch, 2, freq_bins, t_stft, 2)
 
@@ -700,7 +721,7 @@ class BDCSGBSRoformer(Module):
             x = x.reshape(b * f, t, d)
             x = time_transformer(x, band_embedding)
             x = x.view(b, f, t, d)
-            
+
             # Freq transformer: (b, f, t, d) -> (b, t, f, d) -> (b*t, f, d)
             x = x.permute(0, 2, 1, 3)
             x = x.reshape(b * t, f, d)
@@ -749,7 +770,7 @@ class BDCSGBSRoformer(Module):
             window=stft_window,
             normalized=self.stft_normalized,
             return_complex=False,
-            length=audio_length
+            length=audio_length,
         )
 
         # Reshape: (b*3*2, t) -> (b, 3, 2, t)
@@ -758,35 +779,31 @@ class BDCSGBSRoformer(Module):
         return recon_audio
 
 
-
-
-
 class SpeakerBSRoformer(Module):
-
     @beartype
     def __init__(
-            self,
-            dim,
-            *,
-            depth,
-            freqs_per_bands: Tuple[int, ...] = DEFAULT_FREQS_PER_BANDS,
-            dim_head=64,
-            heads=8,
-            attn_dropout=0.,
-            ff_dropout=0.,
-            flash_attn=True,
-            dim_freqs_in=1025,
-            stft_n_fft=2048,
-            stft_hop_length=512,
-            stft_win_length=2048,
-            stft_normalized=False,
-            stft_window_fn: Optional[Callable] = None,
-            mask_estimator_depth=2,
-            mlp_expansion_factor=4,
-            skip_connection=False,
-            sage_attention=False,
-            spk_embd_dim=192,
-            **kwargs
+        self,
+        dim,
+        *,
+        depth,
+        freqs_per_bands: Tuple[int, ...] = DEFAULT_FREQS_PER_BANDS,
+        dim_head=64,
+        heads=8,
+        attn_dropout=0.0,
+        ff_dropout=0.0,
+        flash_attn=True,
+        dim_freqs_in=1025,
+        stft_n_fft=2048,
+        stft_hop_length=512,
+        stft_win_length=2048,
+        stft_normalized=False,
+        stft_window_fn: Optional[Callable] = None,
+        mask_estimator_depth=2,
+        mlp_expansion_factor=4,
+        skip_connection=False,
+        sage_attention=False,
+        spk_embd_dim=192,
+        **kwargs,
     ):
         super().__init__()
 
@@ -820,14 +837,14 @@ class SpeakerBSRoformer(Module):
                 ScaleTransformer(
                     depth=1,  # Fixed to 1 for TensorRT
                     rotary_embed=time_rotary_embed,
-                    **transformer_kwargs
+                    **transformer_kwargs,
                 )
             )
             tran_modules.append(
                 ScaleTransformer(
                     depth=1,  # Fixed to 1 for TensorRT
                     rotary_embed=freq_rotary_embed,
-                    **transformer_kwargs
+                    **transformer_kwargs,
                 )
             )
             self.layers.append(nn.ModuleList(tran_modules))
@@ -842,23 +859,20 @@ class SpeakerBSRoformer(Module):
         # Register STFT window as buffer for TensorRT
         window_fn = default(stft_window_fn, torch.hann_window)
         stft_window = window_fn(stft_win_length)
-        self.register_buffer('stft_window', stft_window, persistent=True)
+        self.register_buffer("stft_window", stft_window, persistent=True)
 
         # Calculate freq bins
         freqs = stft_n_fft // 2 + 1  # 1025 for n_fft=2048
 
         assert len(freqs_per_bands) > 1
         assert sum(freqs_per_bands) == freqs, (
-            f'the number of freqs in the bands must equal {freqs} based on the STFT settings, '
-            f'but got {sum(freqs_per_bands)}'
+            f"the number of freqs in the bands must equal {freqs} based on the STFT settings, "
+            f"but got {sum(freqs_per_bands)}"
         )
 
         freqs_per_bands_with_complex = tuple(2 * f * self.audio_channels for f in freqs_per_bands)
 
-        self.band_split = BandSplit(
-            dim=dim,
-            dim_inputs=freqs_per_bands_with_complex
-        )
+        self.band_split = BandSplit(dim=dim, dim_inputs=freqs_per_bands_with_complex)
 
         self.mask_estimators = nn.ModuleList([])
         for _ in range(3):  # Fixed to 3 for TensorRT
@@ -872,8 +886,9 @@ class SpeakerBSRoformer(Module):
 
         self.spk_embd_to_dim = nn.Linear(spk_embd_dim, dim)
 
-
-    def create_speaker_conditioning_for_fre_roformer(self, speaker_embedding: Optional[Tensor], num_time_steps: int):
+    def create_speaker_conditioning_for_fre_roformer(
+        self, speaker_embedding: Optional[Tensor], num_time_steps: int
+    ):
         if speaker_embedding is None:
             return None
         speaker_embedding = self.spk_embd_to_dim(speaker_embedding)  # (b, d)
@@ -888,7 +903,7 @@ class SpeakerBSRoformer(Module):
         """
         Manual complex multiplication for TensorRT compatibility.
         Both tensors have shape (..., 2) where last dim is [real, imag]
-        
+
         (a + bi) * (c + di) = (ac - bd) + (ad + bc)i
         """
         s_real = stft_repr[..., 0]
@@ -898,13 +913,13 @@ class SpeakerBSRoformer(Module):
 
         res_real = s_real * m_real - s_imag * m_imag
         res_imag = s_real * m_imag + s_imag * m_real
-        
+
         return torch.stack([res_real, res_imag], dim=-1)
 
     def forward(
-            self,
-            raw_audio: Tensor,
-            speaker_embedding: Optional[Tensor] = None,
+        self,
+        raw_audio: Tensor,
+        speaker_embedding: Optional[Tensor] = None,
     ):
         """
         raw_audio: (b, 2, t) - always stereo (2 channels)
@@ -929,15 +944,15 @@ class SpeakerBSRoformer(Module):
             win_length=self.stft_win_length,
             window=stft_window,
             normalized=self.stft_normalized,
-            return_complex=True
+            return_complex=True,
         )
 
         # Convert complex to real: (b*2, f, t_stft) -> (b*2, f, t_stft, 2)
         stft_repr = torch.view_as_real(stft_repr)
-        
+
         freq_bins = stft_repr.shape[1]
         t_stft = stft_repr.shape[2]
-        
+
         # Reshape: (b*2, f, t_stft, 2) -> (b, 2, f, t_stft, 2)
         stft_repr = stft_repr.view(batch, 2, freq_bins, t_stft, 2)
 
@@ -950,7 +965,6 @@ class SpeakerBSRoformer(Module):
         x = self.band_split(x)  # (b, t, num_bands, dim)
 
         b = x.shape[0]
-
 
         store = [None] * len(self.layers)
         for i, transformer_block in enumerate(self.layers):
@@ -968,7 +982,7 @@ class SpeakerBSRoformer(Module):
             x = x.reshape(b * f, t, d)
             x = time_transformer(x, spk_f_cond)
             x = x.view(b, f, t, d)
-            
+
             # Freq transformer: (b, f, t, d) -> (b, t, f, d) -> (b*t, f, d)
             x = x.permute(0, 2, 1, 3)
             x = x.reshape(b * t, f, d)
@@ -1016,7 +1030,7 @@ class SpeakerBSRoformer(Module):
             window=stft_window,
             normalized=self.stft_normalized,
             return_complex=False,
-            length=audio_length
+            length=audio_length,
         )
 
         # Reshape: (b*3*2, t) -> (b, 3, 2, t)

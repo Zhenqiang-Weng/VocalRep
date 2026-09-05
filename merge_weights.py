@@ -38,7 +38,11 @@ def _extract_state_dict(checkpoint):
       - plain state_dict dict
       - dict with 'state_dict' field
     """
-    if isinstance(checkpoint, dict) and "state_dict" in checkpoint and isinstance(checkpoint["state_dict"], dict):
+    if (
+        isinstance(checkpoint, dict)
+        and "state_dict" in checkpoint
+        and isinstance(checkpoint["state_dict"], dict)
+    ):
         return checkpoint["state_dict"]
     if isinstance(checkpoint, dict):
         return checkpoint
@@ -75,7 +79,6 @@ A2B_RULES = [
     # A: layers.*.*.layers.0.1.(norm/rotary/to_*)
     # B: layers.*.*.layers.0.0.(norm/rotary/to_*)
     (re.compile(r"\.layers\.0\.1\."), ".layers.0.0."),
-
     # FFN sub-block index shift:
     # A: layers.*.*.layers.0.3.net.*
     # B: layers.*.*.layers.0.1.net.*
@@ -215,17 +218,29 @@ def merge_model_weights(path_a, path_b, output_path, verbose=True):
     # but keeping it simple and transparent here.
 
     # Save merged checkpoint (state_dict only, consistent with your original behavior)
-    os.makedirs(os.path.dirname(output_path) if os.path.dirname(output_path) else ".", exist_ok=True)
+    os.makedirs(
+        os.path.dirname(output_path) if os.path.dirname(output_path) else ".", exist_ok=True
+    )
     if verbose:
         print(f"\nSaving merged checkpoint to: {output_path}")
     torch.save(merged_state_dict, output_path)
 
     # Write reports
     os.makedirs(CACHE_DIR, exist_ok=True)
-    _write_lines(ONLY_A_TXT, sorted(keys_only_in_a), header=f"Keys only in A ({len(keys_only_in_a)}):")
-    _write_lines(ONLY_B_TXT, sorted(keys_only_in_b), header=f"Keys only in B ({len(keys_only_in_b)}):")
-    _write_lines(REPLACED_TXT, replaced_logs, header=f"Exact-key replaced (A <- B) ({len(replaced_logs)}):")
-    _write_lines(MISMATCH_TXT, mismatch_logs, header=f"Exact-key mismatches kept from A ({len(mismatch_logs)}):")
+    _write_lines(
+        ONLY_A_TXT, sorted(keys_only_in_a), header=f"Keys only in A ({len(keys_only_in_a)}):"
+    )
+    _write_lines(
+        ONLY_B_TXT, sorted(keys_only_in_b), header=f"Keys only in B ({len(keys_only_in_b)}):"
+    )
+    _write_lines(
+        REPLACED_TXT, replaced_logs, header=f"Exact-key replaced (A <- B) ({len(replaced_logs)}):"
+    )
+    _write_lines(
+        MISMATCH_TXT,
+        mismatch_logs,
+        header=f"Exact-key mismatches kept from A ({len(mismatch_logs)}):",
+    )
     _write_lines(
         RENAMED_REPLACED_TXT,
         renamed_replaced_logs,
@@ -237,7 +252,7 @@ def merge_model_weights(path_a, path_b, output_path, verbose=True):
         header=f"Renamed candidates not used ({len(renamed_candidate_not_used)}):",
     )
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("Merge Summary:")
     print(f"  Total keys in A: {len(keys_a)}")
     print(f"  Total keys in B: {len(keys_b)}")
@@ -247,7 +262,7 @@ def merge_model_weights(path_a, path_b, output_path, verbose=True):
     print(f"  Keys only in A (raw): {len(keys_only_in_a)}")
     print(f"  Keys only in B (raw): {len(keys_only_in_b)}")
     print(f"  Renamed replacements via mapping: {renamed_replaced_count}")
-    print(f"{'='*60}\n")
+    print(f"{'=' * 60}\n")
 
     if verbose:
         print("Saved reports to:")
@@ -283,12 +298,7 @@ def main():
     if not os.path.exists(PATH_B):
         raise FileNotFoundError(f"Model B not found: {PATH_B}")
 
-    merge_model_weights(
-        path_a=PATH_A,
-        path_b=PATH_B,
-        output_path=OUTPUT_PATH,
-        verbose=True
-    )
+    merge_model_weights(path_a=PATH_A, path_b=PATH_B, output_path=OUTPUT_PATH, verbose=True)
 
 
 if __name__ == "__main__":

@@ -6,12 +6,12 @@ Usage:
     # Quick load from checkpoint
     >>> from campplus import load_model
     >>> model = load_model('./checkpoint')
-    
+
     # Create and save checkpoint
     >>> from campplus import CAMPPlus, save_checkpoint
     >>> model = CAMPPlus(feat_dim=80, embedding_size=512)
     >>> save_checkpoint(model, './checkpoint')
-    
+
     # Advanced usage
     >>> from campplus import init_from_checkpoint, create_checkpoint
     >>> model = init_from_checkpoint('./checkpoint', device='cuda')
@@ -46,51 +46,52 @@ from .campplus_model import (
     BasicResBlock,
     get_nonlinear,
     statistics_pooling,
-    create_campplus_model
+    create_campplus_model,
 )
 
 # ============================================================================
 # Checkpoint Management
 # ============================================================================
 
+
 class CheckpointManager:
     """Manages model checkpoints with configuration files"""
-    
+
     CONFIG_FILE = "configuration.json"
     MODEL_FILE = "campplus_cn_en_common.pt"
-    
+
     def __init__(self, checkpoint_dir: str):
         self.checkpoint_dir = Path(checkpoint_dir)
-        
-    def save(self, model: torch.nn.Module, config: Dict[str, Any], 
-             filename: Optional[str] = None) -> str:
+
+    def save(
+        self, model: torch.nn.Module, config: Dict[str, Any], filename: Optional[str] = None
+    ) -> str:
         """Save model checkpoint with configuration"""
-        self. checkpoint_dir.mkdir(parents=True, exist_ok=True)
-        
+        self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
         if filename is None:
             filename = self.MODEL_FILE
-            
+
         # Save model state dict
         model_path = self.checkpoint_dir / filename
         torch.save(model.state_dict(), model_path)
-        
+
         # Save configuration
-        config_path = self. checkpoint_dir / self.CONFIG_FILE
-        with open(config_path, 'w', encoding='utf-8') as f:
+        config_path = self.checkpoint_dir / self.CONFIG_FILE
+        with open(config_path, "w", encoding="utf-8") as f:
             json.dump(config, f, indent=2, ensure_ascii=False)
-            
+
         print(f"✓ Model saved to: {model_path}")
         print(f"✓ Config saved to: {config_path}")
         return str(model_path)
-    
-    def load(self, filename: Optional[str] = None, 
-             device: str = 'cpu') -> tuple:
+
+    def load(self, filename: Optional[str] = None, device: str = "cpu") -> tuple:
         """Load model checkpoint and configuration"""
         if filename is None:
             filename = self.MODEL_FILE
-            
+
         # Load configuration
-        config_path = self. checkpoint_dir / self.CONFIG_FILE
+        config_path = self.checkpoint_dir / self.CONFIG_FILE
         if not config_path.exists():
             raise FileNotFoundError(
                 f"Configuration not found: {config_path}\n"
@@ -99,23 +100,23 @@ class CheckpointManager:
                 f"  ├── configuration.json\n"
                 f"  └── {filename}"
             )
-            
-        with open(config_path, 'r', encoding='utf-8') as f:
+
+        with open(config_path, "r", encoding="utf-8") as f:
             config = json.load(f)
-            
+
         # Load model state dict
         model_path = self.checkpoint_dir / filename
         if not model_path.exists():
             raise FileNotFoundError(f"Model checkpoint not found: {model_path}")
-            
-        state_dict = torch.load(model_path, map_location=device)
-        
+
+        state_dict = torch.load(model_path, map_location=device, weights_only=True)
+
         print(f"✓ Loaded from: {self.checkpoint_dir}")
         return state_dict, config
-    
+
     def exists(self) -> bool:
         """Check if checkpoint exists"""
-        config_exists = (self.checkpoint_dir / self. CONFIG_FILE).exists()
+        config_exists = (self.checkpoint_dir / self.CONFIG_FILE).exists()
         model_exists = (self.checkpoint_dir / self.MODEL_FILE).exists()
         return config_exists and model_exists
 
@@ -124,19 +125,22 @@ class CheckpointManager:
 # Configuration Management
 # ============================================================================
 
-def create_config(feat_dim: int = 80,
-                 embedding_size: int = 512,
-                 growth_rate:  int = 32,
-                 bn_size: int = 4,
-                 init_channels:  int = 128,
-                 config_str: str = 'batchnorm-relu',
-                 memory_efficient: bool = True,
-                 output_level: str = 'segment',
-                 **kwargs) -> Dict[str, Any]:
+
+def create_config(
+    feat_dim: int = 80,
+    embedding_size: int = 512,
+    growth_rate: int = 32,
+    bn_size: int = 4,
+    init_channels: int = 128,
+    config_str: str = "batchnorm-relu",
+    memory_efficient: bool = True,
+    output_level: str = "segment",
+    **kwargs,
+) -> Dict[str, Any]:
     """
     Create model configuration dictionary
-    
-    Args: 
+
+    Args:
         feat_dim: Input feature dimension (default: 80)
         embedding_size:  Output embedding dimension (default: 512)
         growth_rate: Dense block growth rate (default: 32)
@@ -146,15 +150,14 @@ def create_config(feat_dim: int = 80,
         memory_efficient: Use gradient checkpointing (default: True)
         output_level: 'segment' or 'frame' (default: 'segment')
         **kwargs: Additional metadata
-        
+
     Returns:
         Configuration dictionary
     """
     config = {
         "model_type": "campplus",
-        "model_version":  "1.0",
+        "model_version": "1.0",
         "framework": "pytorch",
-        
         "model_config": {
             "feat_dim": feat_dim,
             "embedding_size": embedding_size,
@@ -162,10 +165,9 @@ def create_config(feat_dim: int = 80,
             "bn_size": bn_size,
             "init_channels": init_channels,
             "config_str": config_str,
-            "memory_efficient":  memory_efficient,
-            "output_level": output_level
+            "memory_efficient": memory_efficient,
+            "output_level": output_level,
         },
-        
         "feature_config": {
             "sample_rate": kwargs.get("sample_rate", 16000),
             "feature_type": "fbank",
@@ -173,15 +175,14 @@ def create_config(feat_dim: int = 80,
             "frame_length": kwargs.get("frame_length", 25),
             "frame_shift": kwargs.get("frame_shift", 10),
         },
-        
         "training_info": {
             "trained_on": kwargs.get("trained_on", "unknown"),
             "num_speakers": kwargs.get("num_speakers", -1),
             "num_epochs": kwargs.get("num_epochs", -1),
-            "description": kwargs.get("description", "")
-        }
+            "description": kwargs.get("description", ""),
+        },
     }
-    
+
     return config
 
 
@@ -189,30 +190,33 @@ def create_config(feat_dim: int = 80,
 # Main Initialization Functions
 # ============================================================================
 
-def init_from_checkpoint(model_dir: str,
-                        device: str = 'cpu',
-                        pretrained_model:  str = 'campplus_cn_en_common.pt',
-                        strict: bool = True) -> CAMPPlus:
+
+def init_from_checkpoint(
+    model_dir: str,
+    device: str = "cpu",
+    pretrained_model: str = "campplus_cn_en_common.pt",
+    strict: bool = True,
+) -> CAMPPlus:
     """
     Initialize CAMP++ model from checkpoint directory
-    
-    This is the main initialization function that mimics ModelScope's pattern. 
+
+    This is the main initialization function that mimics ModelScope's pattern.
     It loads both the configuration and model weights from a checkpoint directory.
-    
+
     Args:
         model_dir: Directory containing configuration. json and model checkpoint
         device: Device to load model on ('cpu', 'cuda', 'cuda:0', etc.)
         pretrained_model: Checkpoint filename (default: 'campplus_cn_en_common.pth')
         strict: Strict mode for loading state dict (default: True)
-        
+
     Returns:
         Initialized and loaded CAMPPlus model
-        
+
     Example:
         >>> model = init_from_checkpoint('./my_checkpoint', device='cuda')
         >>> features = torch.randn(1, 200, 80)
         >>> embedding = model(features)
-        
+
     Raises:
         FileNotFoundError: If checkpoint directory or files don't exist
         RuntimeError: If model loading fails
@@ -220,10 +224,10 @@ def init_from_checkpoint(model_dir: str,
     # Load checkpoint
     manager = CheckpointManager(model_dir)
     state_dict, config = manager.load(filename=pretrained_model, device=device)
-    
+
     # Extract model config - handle different config structures
     model_config = config.get("model_config", {})
-    
+
     # If model_config is a string (path to yaml), look for nested config
     if isinstance(model_config, str) or not model_config:
         # Try nested structure: config["model"]["model_config"]
@@ -239,115 +243,119 @@ def init_from_checkpoint(model_dir: str,
                 f"Invalid configuration file. Missing valid 'model_config' section.\n"
                 f"Config keys found: {list(config.keys())}"
             )
-    
+
     # Create model
     try:
         model = CAMPPlus(**model_config)
     except Exception as e:
         raise RuntimeError(f"Failed to create model with config {model_config}: {e}")
-    
+
     # Load weights
     try:
         model.load_state_dict(state_dict, strict=strict)
     except Exception as e:
         raise RuntimeError(f"Failed to load state dict: {e}")
-    
+
     # Setup model
     model.to(device)
     model.eval()
-    
+
     # Print info
-    feat_dim = model_config.get('feat_dim', 'unknown')
-    emb_size = model_config.get('embedding_size', 'unknown')
+    feat_dim = model_config.get("feat_dim", "unknown")
+    emb_size = model_config.get("embedding_size", "unknown")
     print(f"✓ CAMP++ Model Ready")
     print(f"  - Feature dim: {feat_dim}")
     print(f"  - Embedding size: {emb_size}")
     print(f"  - Device: {device}")
-    
+
     return model
 
 
-def save_checkpoint(model: CAMPPlus,
-                   checkpoint_dir: str,
-                   config: Optional[Dict[str, Any]] = None,
-                   filename: Optional[str] = None,
-                   **config_kwargs) -> str:
+def save_checkpoint(
+    model: CAMPPlus,
+    checkpoint_dir: str,
+    config: Optional[Dict[str, Any]] = None,
+    filename: Optional[str] = None,
+    **config_kwargs,
+) -> str:
     """
     Save CAMP++ model to checkpoint directory
-    
+
     Args:
         model: CAMPPlus model instance to save
         checkpoint_dir: Directory to save checkpoint
         config: Optional configuration dict (auto-generated if None)
         filename: Optional checkpoint filename (default: 'campplus.pth')
         **config_kwargs: Config parameters if auto-generating config
-        
+
     Returns:
         Path to saved checkpoint file
-        
+
     Example:
         >>> model = CAMPPlus(feat_dim=80, embedding_size=512)
-        >>> save_checkpoint(model, './my_checkpoint', 
+        >>> save_checkpoint(model, './my_checkpoint',
         ...                 trained_on='VoxCeleb', num_epochs=100)
     """
     manager = CheckpointManager(checkpoint_dir)
-    
+
     # Auto-generate config if not provided
     if config is None:
         # Try to infer parameters from model
         try:
-            feat_dim = config_kwargs.get('feat_dim', 80)
-            embedding_size = config_kwargs.get('embedding_size', 512)
-            config = create_config(feat_dim=feat_dim, 
-                                 embedding_size=embedding_size,
-                                 **config_kwargs)
+            feat_dim = config_kwargs.get("feat_dim", 80)
+            embedding_size = config_kwargs.get("embedding_size", 512)
+            config = create_config(
+                feat_dim=feat_dim, embedding_size=embedding_size, **config_kwargs
+            )
         except Exception as e:
             raise ValueError(f"Failed to create config: {e}")
-    
+
     return manager.save(model, config, filename=filename)
 
 
-def create_checkpoint(checkpoint_dir: str,
-                     feat_dim: int = 80,
-                     embedding_size: int = 512,
-                     random_init: bool = True,
-                     **kwargs) -> CAMPPlus:
+def create_checkpoint(
+    checkpoint_dir: str,
+    feat_dim: int = 80,
+    embedding_size: int = 512,
+    random_init: bool = True,
+    **kwargs,
+) -> CAMPPlus:
     """
     Create a new CAMP++ model and save as checkpoint
-    
-    Args: 
+
+    Args:
         checkpoint_dir: Directory to save checkpoint
         feat_dim: Input feature dimension
         embedding_size:  Output embedding dimension
         random_init: Use random initialization (default: True)
         **kwargs: Additional model/config parameters
-        
-    Returns: 
+
+    Returns:
         Created model instance
-        
-    Example: 
-        >>> model = create_checkpoint('./new_checkpoint', feat_dim=80, 
+
+    Example:
+        >>> model = create_checkpoint('./new_checkpoint', feat_dim=80,
         ...                          embedding_size=512)
     """
     # Create model
     model_kwargs = {
-        'feat_dim': feat_dim,
-        'embedding_size': embedding_size,
-        'growth_rate': kwargs.pop('growth_rate', 32),
-        'bn_size': kwargs.pop('bn_size', 4),
-        'init_channels': kwargs.pop('init_channels', 128),
-        'config_str': kwargs.pop('config_str', 'batchnorm-relu'),
-        'memory_efficient': kwargs.pop('memory_efficient', True),
-        'output_level': kwargs.pop('output_level', 'segment')
+        "feat_dim": feat_dim,
+        "embedding_size": embedding_size,
+        "growth_rate": kwargs.pop("growth_rate", 32),
+        "bn_size": kwargs.pop("bn_size", 4),
+        "init_channels": kwargs.pop("init_channels", 128),
+        "config_str": kwargs.pop("config_str", "batchnorm-relu"),
+        "memory_efficient": kwargs.pop("memory_efficient", True),
+        "output_level": kwargs.pop("output_level", "segment"),
     }
-    
+
     model = CAMPPlus(**model_kwargs)
-    
+
     # Save checkpoint
     config = create_config(**model_kwargs, **kwargs)
     manager = CheckpointManager(checkpoint_dir)
     manager.save(model, config)
-    
+
     print(f"✓ New checkpoint created at: {checkpoint_dir}")
     return model
 
@@ -356,41 +364,40 @@ def create_checkpoint(checkpoint_dir: str,
 # Convenient Loading Functions
 # ============================================================================
 
-def load_model(checkpoint_dir:  str, 
-               device: Optional[str] = None,
-               **kwargs) -> CAMPPlus:
+
+def load_model(checkpoint_dir: str, device: Optional[str] = None, **kwargs) -> CAMPPlus:
     """
     Simple one-line model loading (auto device detection)
-    
+
     Args:
         checkpoint_dir: Path to checkpoint directory
         device: Device to load on (auto-detect if None)
         **kwargs: Additional arguments for init_from_checkpoint
-        
+
     Returns:
         Loaded CAMPPlus model
-        
+
     Example:
         >>> model = load_model('./checkpoint')  # Auto device
         >>> model = load_model('./checkpoint', device='cuda')  # Specific device
     """
     if device is None:
-        device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+
     return init_from_checkpoint(checkpoint_dir, device=device, **kwargs)
 
 
 def load_model_cpu(checkpoint_dir: str, **kwargs) -> CAMPPlus:
     """Load model on CPU"""
-    return init_from_checkpoint(checkpoint_dir, device='cpu', **kwargs)
+    return init_from_checkpoint(checkpoint_dir, device="cpu", **kwargs)
 
 
 def load_model_cuda(checkpoint_dir: str, gpu_id: int = 0, **kwargs) -> CAMPPlus:
     """Load model on CUDA"""
-    device = f'cuda:{gpu_id}' if gpu_id >= 0 else 'cuda'
+    device = f"cuda:{gpu_id}" if gpu_id >= 0 else "cuda"
     if not torch.cuda.is_available():
         print("⚠ CUDA not available, falling back to CPU")
-        device = 'cpu'
+        device = "cpu"
     return init_from_checkpoint(checkpoint_dir, device=device, **kwargs)
 
 
@@ -398,14 +405,15 @@ def load_model_cuda(checkpoint_dir: str, gpu_id: int = 0, **kwargs) -> CAMPPlus:
 # Utility Functions
 # ============================================================================
 
+
 def check_checkpoint(checkpoint_dir: str) -> bool:
     """
     Check if a valid checkpoint exists
-    
-    Args: 
+
+    Args:
         checkpoint_dir: Path to checkpoint directory
-        
-    Returns: 
+
+    Returns:
         True if valid checkpoint exists, False otherwise
     """
     manager = CheckpointManager(checkpoint_dir)
@@ -415,13 +423,13 @@ def check_checkpoint(checkpoint_dir: str) -> bool:
 def get_checkpoint_info(checkpoint_dir: str) -> Dict[str, Any]:
     """
     Get checkpoint configuration information
-    
+
     Args:
         checkpoint_dir: Path to checkpoint directory
-        
+
     Returns:
         Configuration dictionary
-        
+
     Example:
         >>> info = get_checkpoint_info('./checkpoint')
         >>> print(f"Embedding size: {info['model_config']['embedding_size']}")
@@ -429,8 +437,8 @@ def get_checkpoint_info(checkpoint_dir: str) -> Dict[str, Any]:
     config_path = Path(checkpoint_dir) / "configuration.json"
     if not config_path.exists():
         raise FileNotFoundError(f"Configuration not found: {config_path}")
-    
-    with open(config_path, 'r', encoding='utf-8') as f:
+
+    with open(config_path, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -438,38 +446,37 @@ def get_checkpoint_info(checkpoint_dir: str) -> Dict[str, Any]:
 # Audio Loading (soundfile version - ModelScope style)
 # ============================================================================
 
-def load_audio_soundfile(audio_path: str,
-                         target_sr:  int = 16000) -> tuple[np.ndarray, int]:
+
+def load_audio_soundfile(audio_path: str, target_sr: int = 16000) -> tuple[np.ndarray, int]:
     """
     Load audio using soundfile (ModelScope implementation)
-    
+
     Args:
         audio_path: Path to audio file
         target_sr: Target sample rate (default: 16000)
-    
+
     Returns:
         audio: Audio waveform numpy array (samples,)
         sr: Sample rate
-    
+
     Example:
         >>> audio, sr = load_audio_soundfile('speaker1.wav')
         >>> print(f"Audio shape: {audio.shape}, SR: {sr}")
     """
     # Read audio file
-    audio, sr = sf.read(audio_path, dtype='float32')
-    
+    audio, sr = sf.read(audio_path, dtype="float32")
+
     # Convert stereo to mono (take first channel)
     if len(audio.shape) == 2:
         audio = audio[:, 0]
-    
+
     # Resample if needed
     if sr != target_sr:
         import scipy.signal
-        audio = scipy.signal.resample_poly(
-            audio, target_sr, sr
-        ).astype('float32')
+
+        audio = scipy.signal.resample_poly(audio, target_sr, sr).astype("float32")
         sr = target_sr
-    
+
     return audio, sr
 
 
@@ -477,16 +484,19 @@ def load_audio_soundfile(audio_path: str,
 # Feature Extraction (Fbank)
 # ============================================================================
 
-def extract_fbank(audio: Union[torch.Tensor, np.ndarray],
-                 sample_rate:  int = 16000,
-                 num_mel_bins: int = 80,
-                 frame_length: float = 25.0,
-                 frame_shift: float = 10.0,
-                 apply_cmvn: bool = True) -> torch.Tensor:
+
+def extract_fbank(
+    audio: Union[torch.Tensor, np.ndarray],
+    sample_rate: int = 16000,
+    num_mel_bins: int = 80,
+    frame_length: float = 25.0,
+    frame_shift: float = 10.0,
+    apply_cmvn: bool = True,
+) -> torch.Tensor:
     """
     Extract Fbank (Filter Bank) features from audio
-    CAMP++ 在 ModelScope 中的特征提取方法
-    
+    Feature extraction used by CAMP++ in ModelScope
+
     Args:
         audio: Audio waveform (samples,) - numpy array or torch tensor
         sample_rate:  Sample rate (default: 16000 Hz)
@@ -494,10 +504,10 @@ def extract_fbank(audio: Union[torch.Tensor, np.ndarray],
         frame_length: Frame length in milliseconds (default: 25.0)
         frame_shift:  Frame shift in milliseconds (default:  10.0)
         apply_cmvn: Apply Cepstral Mean Normalization (default: True)
-    
+
     Returns:
         features: Fbank features, shape (time_steps, num_mel_bins)
-    
+
     Example:
         >>> audio, sr = load_audio_soundfile('test.wav')
         >>> features = extract_fbank(audio, sample_rate=sr)
@@ -506,11 +516,11 @@ def extract_fbank(audio: Union[torch.Tensor, np.ndarray],
     # Convert numpy to tensor if needed
     if isinstance(audio, np.ndarray):
         audio = torch.from_numpy(audio)
-    
+
     # Ensure 2D shape:  (1, samples) for Kaldi. fbank
     if len(audio.shape) == 1:
         audio = audio.unsqueeze(0)
-    
+
     # Extract Fbank features using Kaldi
     # This is the EXACT method used in CAMP++ model
     features = Kaldi.fbank(
@@ -518,14 +528,14 @@ def extract_fbank(audio: Union[torch.Tensor, np.ndarray],
         num_mel_bins=num_mel_bins,
         sample_frequency=sample_rate,
         frame_length=frame_length,
-        frame_shift=frame_shift
+        frame_shift=frame_shift,
     )
-    
+
     # Apply Cepstral Mean Normalization (CMVN)
-    # 减去均值，这是 CAMP++ 使用的归一化方法
+    # Subtract the mean, matching CAMP++ normalization
     if apply_cmvn:
         features = features - features.mean(dim=0, keepdim=True)
-    
+
     return features
 
 
@@ -533,54 +543,51 @@ def extract_fbank(audio: Union[torch.Tensor, np.ndarray],
 # Complete Pipeline Function
 # ============================================================================
 
-def load_and_extract_features(audio_path: str,
-                             target_sr: int = 16000,
-                             num_mel_bins: int = 80,
-                             apply_cmvn: bool = True) -> torch.Tensor:
+
+def load_and_extract_features(
+    audio_path: str, target_sr: int = 16000, num_mel_bins: int = 80, apply_cmvn: bool = True
+) -> torch.Tensor:
     """
-    一步完成：从音频文件到特征提取
-    
+    Load an audio file and extract features in one step
+
     Args:
         audio_path:  Path to audio file
         target_sr: Target sample rate
         num_mel_bins: Number of mel bins
         apply_cmvn:  Apply mean normalization
-    
-    Returns: 
+
+    Returns:
         features: Fbank features (time_steps, num_mel_bins)
-    
+
     Example:
         >>> features = load_and_extract_features('audio. wav')
         >>> print(features.shape)  # torch.Size([T, 80])
     """
     # Step 1: Load audio
     audio, sr = load_audio_soundfile(audio_path, target_sr=target_sr)
-    
+
     # Step 2: Extract features
     features = extract_fbank(
-        audio,
-        sample_rate=sr,
-        num_mel_bins=num_mel_bins,
-        apply_cmvn=apply_cmvn
+        audio, sample_rate=sr, num_mel_bins=num_mel_bins, apply_cmvn=apply_cmvn
     )
-    
+
     return features
 
 
-def extract_embedding(model: CAMPPlus, 
-                     features: Union[torch.Tensor, Any],
-                     device: Optional[str] = None) -> torch.Tensor:
+def extract_embedding(
+    model: CAMPPlus, features: Union[torch.Tensor, Any], device: Optional[str] = None
+) -> torch.Tensor:
     """
     Extract speaker embedding from features
-    
+
     Args:
         model: CAMPPlus model
         features: Input features (batch, time, feat_dim) or convertible to tensor
         device: Device for computation (use model's device if None)
-        
+
     Returns:
         Speaker embeddings (batch, embedding_size)
-        
+
     Example:
         >>> model = load_model('./checkpoint')
         >>> features = torch.randn(2, 200, 80)
@@ -588,57 +595,57 @@ def extract_embedding(model: CAMPPlus,
         >>> print(embeddings.shape)  # (2, 512)
     """
     model.eval()
-    
+
     # Convert to tensor if needed
     if not isinstance(features, torch.Tensor):
         features = torch.FloatTensor(features)
-    
+
     # Ensure correct shape
     if len(features.shape) == 2:
         features = features.unsqueeze(0)
-    
-    assert len(features.shape) == 3, \
-        f"Expected shape (batch, time, feat_dim), got {features.shape}"
-    
+
+    assert len(features.shape) == 3, f"Expected shape (batch, time, feat_dim), got {features.shape}"
+
     # Get device
-    if device is None: 
+    if device is None:
         device = next(model.parameters()).device
-    
+
     # Extract embedding
     with torch.no_grad():
         features = features.to(device)
         embeddings = model(features)
-    
-    return embeddings.cpu()
 
+    return embeddings.cpu()
 
 
 # ============================================================================
 # Core Similarity Computation (ModelScope Implementation)
 # ============================================================================
 
-def compute_cos_similarity(emb1: Union[torch.Tensor, np.ndarray],
-                          emb2: Union[torch. Tensor, np.ndarray]) -> float:
+
+def compute_cos_similarity(
+    emb1: Union[torch.Tensor, np.ndarray], emb2: Union[torch.Tensor, np.ndarray]
+) -> float:
     """
     Compute cosine similarity between two embeddings
-    
-    Implementation from ModelScope speaker verification pipeline: 
+
+    Implementation from ModelScope speaker verification pipeline:
     - Uses torch.nn.CosineSimilarity with dim=1 and eps=1e-6
     - Returns a single float value representing similarity in range [-1, 1]
-    
+
     Mathematical Formula:
         cos_sim = (emb1 · emb2) / (||emb1|| * ||emb2||)
-    
+
     Args:
         emb1: First embedding, shape (embedding_dim,) or (1, embedding_dim)
         emb2: Second embedding, shape (embedding_dim,) or (1, embedding_dim)
-    
+
     Returns:
         Cosine similarity score in range [-1, 1]
         - 1.0: Identical embeddings
         - 0.0: Orthogonal embeddings
         - -1.0: Opposite embeddings
-    
+
     Example:
         >>> emb1 = torch.randn(512)
         >>> emb2 = torch.randn(512)
@@ -650,25 +657,26 @@ def compute_cos_similarity(emb1: Union[torch.Tensor, np.ndarray],
         emb1 = torch.from_numpy(emb1)
     if isinstance(emb2, np.ndarray):
         emb2 = torch.from_numpy(emb2)
-    
+
     # Ensure 2D shape:  (batch_size, embedding_dim)
     if len(emb1.shape) == 1:
         emb1 = emb1.unsqueeze(0)
     if len(emb2.shape) == 1:
         emb2 = emb2.unsqueeze(0)
-    
+
     # Validate shapes
-    assert len(emb1.shape) == 2 and len(emb2.shape) == 2, \
+    assert len(emb1.shape) == 2 and len(emb2.shape) == 2, (
         f"Expected 2D tensors, got shapes {emb1.shape} and {emb2.shape}"
-    
+    )
+
     # Create cosine similarity function
     # dim=1: compute similarity along embedding dimension
     # eps=1e-6: small value to avoid division by zero
     cos = torch.nn.CosineSimilarity(dim=1, eps=1e-6)
-    
+
     # Compute cosine similarity
     cosine = cos(emb1, emb2)
-    
+
     # Return scalar value
     return cosine.item()
 
@@ -677,14 +685,18 @@ def compute_cos_similarity(emb1: Union[torch.Tensor, np.ndarray],
 # Dominant Speaker Embedding Extraction with Spectral Clustering
 # ============================================================================
 
+
 class ClusteringResult(NamedTuple):
-    """谱聚类结果"""
-    mean_embedding: torch.Tensor          # 最大簇的平均embedding
-    all_embeddings: np.ndarray            # 所有片段的embeddings
-    labels: np.ndarray                    # 各片段的聚类标签
-    largest_cluster_label: int            # 最大簇的标签
-    segment_indices: List[Tuple[int, int]]  # 各有效片段在重采样后音频中的(start, end)索引
-    n_clusters: int                       # 聚类数量
+    """Spectral clustering result"""
+
+    mean_embedding: torch.Tensor  # Mean embedding of the largest cluster
+    all_embeddings: np.ndarray  # Embeddings from all segments
+    labels: np.ndarray  # Cluster label for each segment
+    largest_cluster_label: int  # Label of the largest cluster
+    segment_indices: List[
+        Tuple[int, int]
+    ]  # (start, end) indices of valid segments in the resampled waveform
+    n_clusters: int  # Number of clusters
 
 
 def extract_dominant_speaker_embedding_with_clusters(
@@ -696,196 +708,105 @@ def extract_dominant_speaker_embedding_with_clusters(
     energy_threshold: float = 0.1,
     max_clusters: int = 3,
     device: Optional[str] = None,
-    debug: bool = False
+    debug: bool = False,
+    batch_size: int = 8,
+    max_segments: int = 64,
 ) -> Optional[ClusteringResult]:
+    """Extract and cluster pretrained speaker embeddings from active audio segments.
+
+    Accept mono or stereo audio in either channel layout. Short final segments
+    are repeated to the model window length after energy filtering. Bound both
+    inference batches and the number of sampled segments for long recordings.
+    Return None for empty or silent audio; reject non-finite samples.
     """
-    从音频中提取主导说话人的embedding，并返回完整的聚类信息
-    
-    与 extract_dominant_speaker_embedding 类似，但返回更详细的聚类结果，
-    用于后续对非主导簇片段的重新推理。
-    
-    Args:
-        model: CAMPPlus模型实例
-        audio: 输入音频numpy数组，支持单声道或双声道
-        source_sr: 源采样率 (default: 44100)
-        target_sr: 目标采样率 (default: 16000)
-        segment_duration: 每个片段的时长，秒 (default: 2.0)
-        energy_threshold: 最小RMS能量阈值 (default: 0.1)
-        max_clusters: 最大聚类数量 (default: 3)
-        device: 计算设备
-        debug: 是否打印调试信息
-    
-    Returns:
-        ClusteringResult 包含:
-        - mean_embedding: 最大簇的平均embedding
-        - all_embeddings: 所有有效片段的embeddings
-        - labels: 各片段的聚类标签
-        - largest_cluster_label: 最大簇的标签
-        - segment_indices: 各有效片段在重采样后音频中的(start, end)索引
-        - n_clusters: 聚类数量
-        
-        如果没有有效片段则返回None
-    """
+    if source_sr <= 0 or target_sr != 16000:
+        raise ValueError("CAM++ requires a positive source rate and a 16000 Hz target rate.")
+    if not np.isfinite(segment_duration) or segment_duration < 0.1:
+        raise ValueError("Speaker segments must be at least 0.1 seconds long.")
+    if batch_size < 1 or max_segments < 1 or max_clusters < 1:
+        raise ValueError("Batch size, segment limit, and cluster count must be positive.")
+    if not np.isfinite(energy_threshold) or energy_threshold < 0:
+        raise ValueError("Energy threshold must be finite and non-negative.")
     model.eval()
-    
-    # 获取设备
     if device is None:
         device = next(model.parameters()).device
-    
-    # Step 0: 双声道转单声道
-    if len(audio.shape) == 2:
-        if audio.shape[0] == 2:
+    audio = np.asarray(audio, dtype=np.float32)
+    if audio.ndim == 2:
+        if audio.shape[0] in (1, 2):
             audio = audio.mean(axis=0)
-            if debug:
-                print(f"[DEBUG] 双声道 (2, samples) -> 单声道")
-        elif audio.shape[1] == 2:
+        elif audio.shape[1] in (1, 2):
             audio = audio.mean(axis=1)
-            if debug:
-                print(f"[DEBUG] 双声道 (samples, 2) -> 单声道")
         else:
-            if audio.shape[0] < audio.shape[1]:
-                audio = audio.mean(axis=0)
-            else:
-                audio = audio.mean(axis=1)
-            if debug:
-                print(f"[DEBUG] 多声道 -> 单声道 (取均值)")
-    
-    audio = audio.astype(np.float32)
-    
-    if debug:
-        print(f"[DEBUG] 音频长度: {len(audio)} samples ({len(audio)/source_sr:.2f}s @ {source_sr}Hz)")
-    
-    # Step 1: 重采样
-    if source_sr != target_sr:
-        audio = scipy.signal.resample_poly(
-            audio, target_sr, source_sr
-        ).astype(np.float32)
-        if debug:
-            print(f"[DEBUG] 重采样: {source_sr}Hz -> {target_sr}Hz, 新长度: {len(audio)} samples")
-    
-    # Step 2: 按segment_duration切分
-    segment_samples = int(segment_duration * target_sr)
-    total_samples = len(audio)
-    
-    segments = []
-    segment_indices = []  # 记录每个有效片段的起止索引
-    segment_energies = []
-    
-    for start_idx in range(0, total_samples, segment_samples):
-        end_idx = start_idx + segment_samples
-        if end_idx > total_samples:
-            break
-        
-        segment = audio[start_idx:end_idx]
-        rms_energy = np.sqrt(np.mean(segment ** 2))
-        
-        if rms_energy > energy_threshold:
-            segments.append(segment)
-            segment_indices.append((start_idx, end_idx))
-            segment_energies.append(rms_energy)
-    
-    if len(segments) == 0:
-        if debug:
-            print("[DEBUG] ⚠ 没有找到能量高于阈值的有效片段")
+            raise ValueError("Expected mono or stereo audio.")
+    if audio.ndim != 1 or not np.isfinite(audio).all():
+        raise ValueError("Audio must be a finite mono or stereo waveform.")
+    if audio.size == 0:
         return None
-    
+    if source_sr != target_sr:
+        audio = scipy.signal.resample_poly(audio, target_sr, source_sr).astype(np.float32)
+
+    segment_samples = int(segment_duration * target_sr)
+    segment_indices = []
+    for start in range(0, len(audio), segment_samples):
+        end = min(start + segment_samples, len(audio))
+        segment = audio[start:end]
+        # At least 100 ms of active audio is needed for a useful embedding.
+        if len(segment) >= target_sr // 10 and np.sqrt(np.mean(segment**2)) > energy_threshold:
+            segment_indices.append((start, end))
+    if not segment_indices:
+        return None
+    if len(segment_indices) > max_segments:
+        selected = np.linspace(0, len(segment_indices) - 1, max_segments, dtype=int)
+        segment_indices = [segment_indices[index] for index in selected]
+
+    batches = []
+    with torch.inference_mode():
+        for offset in range(0, len(segment_indices), batch_size):
+            features = []
+            for start, end in segment_indices[offset : offset + batch_size]:
+                segment = audio[start:end]
+                if len(segment) < segment_samples:
+                    segment = np.tile(segment, int(np.ceil(segment_samples / len(segment))))
+                    segment = segment[:segment_samples]
+                features.append(extract_fbank(segment, sample_rate=target_sr))
+            embeddings = model(torch.stack(features).to(device))
+            batches.append(embeddings.float().cpu().numpy())
+    embeddings_np = np.concatenate(batches)
+    if not np.isfinite(embeddings_np).all():
+        raise ValueError("CAM++ produced non-finite embeddings.")
+
+    # Spectral decomposition requires fewer clusters than samples.
+    n_clusters = min(max_clusters, max(1, len(segment_indices) - 1))
+    if n_clusters == 1:
+        labels = np.zeros(len(segment_indices), dtype=int)
+    else:
+        norm = np.linalg.norm(embeddings_np, axis=1, keepdims=True).clip(min=1e-8)
+        normalized = embeddings_np / norm
+        affinity = np.clip((normalized @ normalized.T + 1) / 2, 0, 1)
+        labels = SpectralClustering(
+            n_clusters=n_clusters,
+            affinity="precomputed",
+            assign_labels="cluster_qr",
+            random_state=0,
+        ).fit_predict(affinity)
+    largest_cluster_label = Counter(labels).most_common(1)[0][0]
+    mean_embedding = torch.from_numpy(
+        embeddings_np[labels == largest_cluster_label].mean(axis=0)
+    ).float()
     if debug:
-        print(f"[DEBUG] 找到 {len(segments)} 个有效片段 (能量阈值: {energy_threshold})")
-        print(f"[DEBUG] 片段能量: {[f'{e:.4f}' for e in segment_energies]}")
-    
-    # Step 3: 批量提取特征和embedding
-    features_list = []
-    for segment in segments:
-        feat = extract_fbank(segment, sample_rate=target_sr)
-        features_list.append(feat)
-    
-    features_batch = torch.stack(features_list, dim=0).to(device)
-    
-    if debug:
-        print(f"[DEBUG] 特征batch shape: {features_batch.shape}")
-    
-    with torch.no_grad():
-        embeddings = model(features_batch)
-    
-    embeddings_np = embeddings.cpu().numpy()
-    
-    if debug:
-        print(f"[DEBUG] Embeddings shape: {embeddings_np.shape}")
-    
-    # Step 4: 谱聚类
-    n_clusters = min(max_clusters, len(segments))
-    n_clusters = max(1, n_clusters)
-    
-    if n_clusters == 1 or len(segments) < 2:
-        mean_embedding = torch.from_numpy(embeddings_np.mean(axis=0)).float()
-        labels = np.zeros(len(segments), dtype=int)
-        if debug:
-            print(f"[DEBUG] 聚类数=1，返回全部 {len(segments)} 个片段的均值embedding")
-        return ClusteringResult(
-            mean_embedding=mean_embedding,
-            all_embeddings=embeddings_np,
-            labels=labels,
-            largest_cluster_label=0,
-            segment_indices=segment_indices,
-            n_clusters=1
+        print(
+            f"CAM++: {len(segment_indices)} segments, {n_clusters} clusters, "
+            f"dominant cluster {largest_cluster_label}"
         )
-    
-    # 计算余弦相似度矩阵
-    embeddings_norm = embeddings_np / (np.linalg.norm(embeddings_np, axis=1, keepdims=True) + 1e-8)
-    affinity_matrix = np.dot(embeddings_norm, embeddings_norm.T)
-    
-    if debug:
-        print(f"[DEBUG] 余弦相似度矩阵 (原始 [-1, 1]):")
-        print(f"[DEBUG] shape: {affinity_matrix.shape}")
-        print("[DEBUG] " + "-" * 50)
-        for i, row in enumerate(affinity_matrix):
-            row_str = "  ".join([f"{v:6.3f}" for v in row])
-            print(f"[DEBUG] seg{i}: [{row_str}]")
-        print("[DEBUG] " + "-" * 50)
-    
-    # 转换到 [0, 1] 范围
-    affinity_matrix = (affinity_matrix + 1) / 2
-    
-    if debug:
-        print(f"[DEBUG] 亲和矩阵 (归一化到 [0, 1]):")
-        for i, row in enumerate(affinity_matrix):
-            row_str = "  ".join([f"{v:6.3f}" for v in row])
-            print(f"[DEBUG] seg{i}: [{row_str}]")
-    
-    # 谱聚类
-    # n_clusters = estimate_k_by_eigengap(affinity_matrix)[0]
-    clustering = SpectralClustering(
-        n_clusters=n_clusters,
-        affinity='precomputed',
-        assign_labels='cluster_qr',
-    )
-    labels = clustering.fit_predict(affinity_matrix)
-    
-    # 找到最大簇
-    label_counts = Counter(labels)
-    largest_cluster_label = label_counts.most_common(1)[0][0]
-    largest_cluster_size = label_counts[largest_cluster_label]
-    
-    # 获取最大簇的embedding均值
-    largest_cluster_mask = (labels == largest_cluster_label)
-    largest_cluster_embeddings = embeddings_np[largest_cluster_mask]
-    mean_embedding = torch.from_numpy(largest_cluster_embeddings.mean(axis=0)).float()
-    
-    if debug:
-        print(f"[DEBUG] 谱聚类完成 (n_clusters={n_clusters})")
-        print(f"[DEBUG] 各片段标签: {labels.tolist()}")
-        print(f"[DEBUG] 簇分布: {dict(label_counts)}")
-        print(f"[DEBUG] 最大簇: label={largest_cluster_label}, size={largest_cluster_size}")
-        print(f"[DEBUG] 最大簇包含片段索引: {np.where(largest_cluster_mask)[0].tolist()}")
-    
     return ClusteringResult(
         mean_embedding=mean_embedding,
         all_embeddings=embeddings_np,
         labels=labels,
-        largest_cluster_label=largest_cluster_label,
+        largest_cluster_label=int(largest_cluster_label),
         segment_indices=segment_indices,
-        n_clusters=n_clusters
+        n_clusters=n_clusters,
     )
+
 
 def estimate_k_by_eigengap(affinity_matrix, k_max=20, eps=1e-12):
     W = np.asarray(affinity_matrix, dtype=np.float64)
@@ -902,14 +823,14 @@ def estimate_k_by_eigengap(affinity_matrix, k_max=20, eps=1e-12):
     L = np.eye(n) - S
 
     m = min(n, k_max + 1)
-    evals = np.linalg.eigvalsh(L)[:m]   # 已排序（升序）
-    gaps = np.diff(evals)               # gaps[i] = evals[i+1]-evals[i]
+    evals = np.linalg.eigvalsh(L)[:m]  # Sorted in ascending order
+    gaps = np.diff(evals)  # gaps[i] = evals[i+1]-evals[i]
 
-    k = int(np.argmax(gaps[:m-1]) + 1)  # +1 because i -> k=i+1
+    k = int(np.argmax(gaps[: m - 1]) + 1)  # +1 because i -> k=i+1
     return k, evals, gaps
 
 
-# 更新 extract_dominant_speaker_embedding 使用新函数
+# Delegate dominant speaker extraction to the clustering function
 def extract_dominant_speaker_embedding(
     model: CAMPPlus,
     audio: np.ndarray,
@@ -919,13 +840,13 @@ def extract_dominant_speaker_embedding(
     energy_threshold: float = 0.1,
     max_clusters: int = 3,
     device: Optional[str] = None,
-    debug: bool = False
+    debug: bool = False,
 ) -> Optional[torch.Tensor]:
     """
-    从44.1kHz音频中提取主导说话人的embedding
-    
-    这是简化版本，只返回最大簇的平均embedding。
-    如需完整聚类信息，请使用 extract_dominant_speaker_embedding_with_clusters
+    Extract the dominant speaker embedding from 44.1 kHz audio
+
+    Return only the mean embedding of the largest cluster.
+    Use extract_dominant_speaker_embedding_with_clusters for complete clustering details
     """
     result = extract_dominant_speaker_embedding_with_clusters(
         model=model,
@@ -936,12 +857,12 @@ def extract_dominant_speaker_embedding(
         energy_threshold=energy_threshold,
         max_clusters=max_clusters,
         device=device,
-        debug=debug
+        debug=debug,
     )
-    
+
     if result is None:
         return None
-    
+
     return result.mean_embedding
 
 
@@ -949,55 +870,52 @@ def extract_dominant_speaker_embedding(
 # Package Information
 # ============================================================================
 
-__version__ = '1.0.0'
-__author__ = 'CAMP++ Implementation'
+__version__ = "1.0.0"
+__author__ = "CAMP++ Implementation"
 __all__ = [
     # Main functions
-    'init_from_checkpoint',
-    'save_checkpoint',
-    'create_checkpoint',
-    'load_model',
-    'load_model_cpu',
-    'load_model_cuda',
-    
+    "init_from_checkpoint",
+    "save_checkpoint",
+    "create_checkpoint",
+    "load_model",
+    "load_model_cpu",
+    "load_model_cuda",
     # Model classes
-    'CAMPPlus',
-    'create_campplus_model',
-    
+    "CAMPPlus",
+    "create_campplus_model",
     # Utilities
-    'check_checkpoint',
-    'get_checkpoint_info',
-    'extract_embedding',
-    'create_config',
-    'compute_cos_similarity',
-    'load_and_extract_features',
-    'load_audio_soundfile',
-    'extract_fbank',
-    'extract_dominant_speaker_embedding',
-    'extract_dominant_speaker_embedding_with_clusters',  # 新增
-    'ClusteringResult',  # 新增
-    
+    "check_checkpoint",
+    "get_checkpoint_info",
+    "extract_embedding",
+    "create_config",
+    "compute_cos_similarity",
+    "load_and_extract_features",
+    "load_audio_soundfile",
+    "extract_fbank",
+    "extract_dominant_speaker_embedding",
+    "extract_dominant_speaker_embedding_with_clusters",  # Added
+    "ClusteringResult",  # Added
     # Components (for advanced users)
-    'FCM',
-    'TDNNLayer',
-    'CAMLayer',
-    'CAMDenseTDNNLayer',
-    'CAMDenseTDNNBlock',
-    'TransitLayer',
-    'DenseLayer',
-    'StatsPool',
-    'BasicResBlock',
-    'get_nonlinear',
-    'statistics_pooling',
-    
+    "FCM",
+    "TDNNLayer",
+    "CAMLayer",
+    "CAMDenseTDNNLayer",
+    "CAMDenseTDNNBlock",
+    "TransitLayer",
+    "DenseLayer",
+    "StatsPool",
+    "BasicResBlock",
+    "get_nonlinear",
+    "statistics_pooling",
     # Checkpoint manager
-    'CheckpointManager',
+    "CheckpointManager",
 ]
 
 
 # ============================================================================
 # Module-level convenience
 # ============================================================================
+
 
 def info():
     """Print package information"""
@@ -1021,7 +939,8 @@ def info():
 
 
 # Show info on import if in interactive mode
-if __name__ != '__main__':
+if __name__ != "__main__":
     import sys
-    if hasattr(sys, 'ps1'):  # Interactive mode
+
+    if hasattr(sys, "ps1"):  # Interactive mode
         info()

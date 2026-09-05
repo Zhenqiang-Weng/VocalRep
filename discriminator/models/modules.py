@@ -2,14 +2,30 @@ import torch.nn as nn
 import torch
 
 
-
 class Conv1d(nn.Conv1d):
     """A wrapper around nn.Conv1d, that works on (batch, time, channels)"""
 
-    def __init__(self, in_channels, out_channels, kernel_size=1, stride=1, dilation=1, groups=1, bias=True, padding=0):
-        super(Conv1d, self).__init__(in_channels=in_channels, out_channels=out_channels,
-                                     kernel_size=kernel_size, stride=stride, dilation=dilation,
-                                     groups=groups, bias=bias, padding=padding)
+    def __init__(
+        self,
+        in_channels,
+        out_channels,
+        kernel_size=1,
+        stride=1,
+        dilation=1,
+        groups=1,
+        bias=True,
+        padding=0,
+    ):
+        super(Conv1d, self).__init__(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=kernel_size,
+            stride=stride,
+            dilation=dilation,
+            groups=groups,
+            bias=bias,
+            padding=padding,
+        )
 
     def forward(self, x):
         return super().forward(x.transpose(2, 1)).transpose(2, 1)
@@ -23,9 +39,14 @@ class Conv(nn.Module):
         super(Conv, self).__init__()
         self.pad = ZeroTemporalPad(kernel_size, dilation, causal=causal)
         self.causal = causal
-        self.conv = Conv1d(in_channels, out_channels, kernel_size,
-                           stride=1,  # paper: 'The stride of convolution is always 1.'
-                           dilation=dilation, bias=bias)
+        self.conv = Conv1d(
+            in_channels,
+            out_channels,
+            kernel_size,
+            stride=1,  # paper: 'The stride of convolution is always 1.'
+            dilation=dilation,
+            bias=bias,
+        )
 
     def forward(self, x):
         """Calculate forward propagation.
@@ -58,8 +79,9 @@ class FreqNorm(nn.BatchNorm1d):
     """
 
     def __init__(self, channels, affine=True, track_running_stats=True, momentum=0.1):
-        super(FreqNorm, self).__init__(channels, affine=affine, track_running_stats=track_running_stats,
-                                       momentum=momentum)
+        super(FreqNorm, self).__init__(
+            channels, affine=affine, track_running_stats=track_running_stats, momentum=momentum
+        )
 
     def forward(self, x):
         return super().forward(x.transpose(2, 1)).transpose(2, 1)
@@ -78,7 +100,7 @@ class ZeroTemporalPad(nn.ZeroPad2d):
     """Pad sequences to equal lentgh in the temporal dimension"""
 
     def __init__(self, kernel_size, dilation, causal=False):
-        total_pad = (dilation * (kernel_size - 1))
+        total_pad = dilation * (kernel_size - 1)
 
         if causal:
             super(ZeroTemporalPad, self).__init__((0, 0, total_pad, 0))
@@ -87,19 +109,28 @@ class ZeroTemporalPad(nn.ZeroPad2d):
             end = total_pad - begin
             super(ZeroTemporalPad, self).__init__((0, 0, begin, end))
 
+
 class Mask(nn.Module):
     def __init__(self, mask_value=0):
         super(Mask, self).__init__()
         self.mask_value = mask_value
 
     def forward(self, x, lengths, dim=-1):
-        assert dim != 0, 'Masking not available for batch dimension'
-        assert len(lengths) == x.shape[0], 'Lengths must contain as many elements as ther are items in the batch'
+        assert dim != 0, "Masking not available for batch dimension"
+        assert len(lengths) == x.shape[0], (
+            "Lengths must contain as many elements as ther are items in the batch"
+        )
 
         lengths = torch.as_tensor(lengths)
 
-        to_expand = [1] * (len(x.shape)-1) + [-1]
-        mask = torch.arange(x.shape[dim]).expand(to_expand).transpose(dim, -1).expand(x.shape).to(lengths.device)
+        to_expand = [1] * (len(x.shape) - 1) + [-1]
+        mask = (
+            torch.arange(x.shape[dim])
+            .expand(to_expand)
+            .transpose(dim, -1)
+            .expand(x.shape)
+            .to(lengths.device)
+        )
         mask = mask < lengths.expand(to_expand).transpose(0, -1)
 
         masked_x = x.masked_fill(~mask, self.mask_value)

@@ -1,6 +1,6 @@
 # coding: utf-8
-__author__ = 'Roman Solovyev (ZFTurbo): https://github.com/ZFTurbo/'
-__version__ = '1.0.4'
+__author__ = "Roman Solovyev (ZFTurbo): https://github.com/ZFTurbo/"
+__version__ = "1.0.4"
 
 # Read more here:
 # https://huggingface.co/docs/accelerate/index
@@ -39,7 +39,17 @@ warnings.filterwarnings("ignore")
 
 metric_list = ["sdr", "si_sdr", "l1_freq", "bleedless", "fullness"]
 
-def valid(model, valid_loader, args, config, device, verbose=False, diffusion_wrapper=None, current_step=None):
+
+def valid(
+    model,
+    valid_loader,
+    args,
+    config,
+    device,
+    verbose=False,
+    diffusion_wrapper=None,
+    current_step=None,
+):
     instruments = prefer_target_instrument(config)
 
     # Use nested dictionary structure: {metric: {instr: []}}
@@ -58,35 +68,40 @@ def valid(model, valid_loader, args, config, device, verbose=False, diffusion_wr
         path = path_list[0]
         mix, sr = sf.read(path)
         folder = os.path.dirname(path)
-        res = demix(config, model, mix.T, device, model_type=args.model_type)  # returns dict: {instr: [C, T]}
+        res = demix(
+            config, model, mix.T, device, model_type=args.model_type
+        )  # returns dict: {instr: [C, T]}
 
         for stem_idx, instr in enumerate(instruments):
-            if instr != 'other' or config.training.other_fix is False:
-                track, sr1 = sf.read(folder + '/{}.wav'.format(instr))
+            if instr != "other" or config.training.other_fix is False:
+                track, sr1 = sf.read(folder + "/{}.wav".format(instr))
             else:
                 # other is actually instrumental
-                track, sr1 = sf.read(folder + '/{}.wav'.format('vocals'))
+                track, sr1 = sf.read(folder + "/{}.wav".format("vocals"))
                 track = mix - track
-            
+
             # Apply diffusion model post-processing/enhancement when enabled
-            if diffusion_wrapper is not None and (diffusion_wrapper[stem_idx] is not None and current_step >= diffusion_wrapper[stem_idx].config.n_train_start):
+            if diffusion_wrapper is not None and (
+                diffusion_wrapper[stem_idx] is not None
+                and current_step >= diffusion_wrapper[stem_idx].config.n_train_start
+            ):
                 diff_model = diffusion_wrapper[stem_idx]
                 if diff_model is not None:
                     # res[instr]: [C, T] numpy array
                     # Convert to torch tensor: [C, T] -> [1, C, T]
                     source_wave = torch.from_numpy(res[instr]).unsqueeze(0).to(device)
-                    
+
                     # Run diffusion inference
                     with torch.no_grad():
                         enhanced_wave = diff_model.inference(
                             source_wave,  # [1, C, T]
                             num_steps=10,  # fixed to 10 steps
-                            method='euler'
+                            method="euler",
                         )
-                    
+
                     # Convert back to numpy: [1, C, T] -> [C, T]
                     res[instr] = enhanced_wave.squeeze(0).cpu().numpy()
-            
+
             # Metric computation expects [T, C], convert from [C, T]
             references = np.expand_dims(track, axis=0)  # [T, C] -> [1, T, C]
             estimates = np.expand_dims(res[instr].T, axis=0)  # [C, T] -> [T, C] -> [1, T, C]
@@ -96,7 +111,7 @@ def valid(model, valid_loader, args, config, device, verbose=False, diffusion_wr
             for metric_name, value in results:
                 single_val = torch.tensor([value], device=device, dtype=torch.float32)
                 all_metrics[metric_name][instr].append(single_val)
-                pbar_dict['{}_{}'.format(metric_name, instr)] = value
+                pbar_dict["{}_{}".format(metric_name, instr)] = value
         if verbose:
             all_mixtures_path.set_postfix(pbar_dict)
 
@@ -107,9 +122,9 @@ class MSSValidationDataset(torch.utils.data.Dataset):
     def __init__(self, args):
         all_mixtures_path = []
         for valid_path in args.valid_path:
-            part = sorted(glob.glob(valid_path + '/*/mixture.wav'))
+            part = sorted(glob.glob(valid_path + "/*/mixture.wav"))
             if len(part) == 0:
-                print('No validation data found in: {}'.format(valid_path))
+                print("No validation data found in: {}".format(valid_path))
             all_mixtures_path += part
 
         self.list_of_files = all_mixtures_path
@@ -168,7 +183,7 @@ def train_model(args):
         dest="diffusion_model_path",
         default="",
     )
-    
+
     if args is None:
         args = parser.parse_args()
     else:
@@ -179,16 +194,16 @@ def train_model(args):
     torch.backends.cudnn.benchmark = not args.deterministic
     if args.deterministic:
         torch.use_deterministic_algorithms(True, warn_only=True)
-    
+
     # Fix 1: add exception handling to avoid repeated spawn setup failures
     try:
-        torch.multiprocessing.set_start_method('spawn', force=True)
+        torch.multiprocessing.set_start_method("spawn", force=True)
     except RuntimeError as e:
         accelerator.print(f"Warning: multiprocessing start method already set: {e}")
 
     model, config = get_model_from_config(args.model_type, args.config_path)
     accelerator.print("Instruments: {}".format(config.training.instruments))
-    
+
     # Fix 2: add debug logs for distributed training state
     accelerator.print(f"[DEBUG] Number of processes: {accelerator.num_processes}")
     accelerator.print(f"[DEBUG] Device: {accelerator.device}")
@@ -202,18 +217,18 @@ def train_model(args):
 
     # wandb
     if accelerator.is_main_process:
-        if args.wandb_key is not None and args.wandb_key.strip() != '':
+        if args.wandb_key is not None and args.wandb_key.strip() != "":
             wandb.login(key=args.wandb_key)
             wandb.init(project=args.wandb_project, name=args.wandb_name, config=run_config)
         else:
             wandb.init(
                 project=args.wandb_project,
                 name=args.wandb_name,
-                mode='offline',
+                mode="offline",
                 config=run_config,
             )
     else:
-        wandb.init(mode='disabled')
+        wandb.init(mode="disabled")
 
     # Fix for num of steps
     config.training.num_steps *= accelerator.num_processes
@@ -225,7 +240,9 @@ def train_model(args):
             config,
             args.data_path,
             batch_size=batch_size,
-            metadata_path=os.path.join(args.results_path, 'metadata_{}.pkl'.format(args.dataset_type)),
+            metadata_path=os.path.join(
+                args.results_path, "metadata_{}.pkl".format(args.dataset_type)
+            ),
             dataset_type=args.dataset_type,
             verbose=accelerator.is_main_process,
         )
@@ -235,7 +252,7 @@ def train_model(args):
         batch_size=batch_size,
         shuffle=True,
         num_workers=args.num_workers,
-        pin_memory=args.pin_memory
+        pin_memory=args.pin_memory,
     )
 
     validset = MSSValidationDataset(args)
@@ -248,195 +265,219 @@ def train_model(args):
     )
 
     # Fix 3: checkpoint loading should happen before prepare
-    if args.start_check_point != '':
-        accelerator.print('Start from checkpoint: {}'.format(args.start_check_point))
+    if args.start_check_point != "":
+        accelerator.print("Start from checkpoint: {}".format(args.start_check_point))
         if 0:
             load_not_compatible_weights(model, args.start_check_point, verbose=False)
         else:
             # Load before prepare to ensure weights are correctly applied
-            checkpoint = torch.load(args.start_check_point, map_location='cpu')
+            checkpoint = torch.load(args.start_check_point, map_location="cpu")
             model.load_state_dict(checkpoint, strict=False)
             if args.copy_first_mask_estimator:
-                if hasattr(model, 'copy_first_mask_estimator_to_others'):
+                if hasattr(model, "copy_first_mask_estimator_to_others"):
                     model.copy_first_mask_estimator_to_others()
             if args.unfreeze_mask_estimators:
-                if hasattr(model, 'frozen_all') and hasattr(model, 'unfreeze_mask_estimators_by_indexes'):
+                if hasattr(model, "frozen_all") and hasattr(
+                    model, "unfreeze_mask_estimators_by_indexes"
+                ):
                     model.frozen_all()
                     model.unfreeze_mask_estimators_by_indexes(args.estimator_unfreeze_indexes)
             accelerator.print(f"Checkpoint loaded successfully")
-            
+
     # Discriminator setup - read from config
     discriminators = []
     gan_models = []
     if args.use_discriminator:
         # Read gan_model list from config
-        gan_models_raw = getattr(config.training, 'gan_model', None)
+        gan_models_raw = getattr(config.training, "gan_model", None)
         num_stems = len(config.training.instruments)
-        
+
         if gan_models_raw is None:
             # Default to mel discriminator
-            accelerator.print("Warning: gan_model not found in config, using default 'mel' for all stems")
-            gan_models = ['mel'] * num_stems
+            accelerator.print(
+                "Warning: gan_model not found in config, using default 'mel' for all stems"
+            )
+            gan_models = ["mel"] * num_stems
         elif len(gan_models_raw) != num_stems:
-            raise ValueError(f"gan_model length ({len(gan_models_raw)}) must match number of instruments ({num_stems})")
+            raise ValueError(
+                f"gan_model length ({len(gan_models_raw)}) must match number of instruments ({num_stems})"
+            )
         else:
             gan_models = gan_models_raw
-        
+
         accelerator.print(f"Creating discriminators for {num_stems} stems with types: {gan_models}")
-        
+
         for idx, (instr, input_type) in enumerate(zip(config.training.instruments, gan_models)):
-            if input_type is None or input_type.lower() == 'none':
+            if input_type is None or input_type.lower() == "none":
                 # No discriminator for this stem
                 accelerator.print(f"Stem '{instr}': No discriminator (None)")
                 discriminators.append(None)
                 continue
-            
+
             # Build config based on input_type
             disc_cfg = DiscriminatorConfig(
                 input_type=input_type,
             )
-            
+
             disc_wrapper = DiscriminatorWrapper(disc_cfg, accelerator)
-            
+
             # Load checkpoint if provided
-            if args.discriminator_start_check_point != '':
-                ckpt_path = os.path.join(args.discriminator_start_check_point, f'{instr}.pth')
+            if args.discriminator_start_check_point != "":
+                ckpt_path = os.path.join(args.discriminator_start_check_point, f"{instr}.pth")
                 if os.path.exists(ckpt_path):
                     disc_wrapper.load_checkpoint(ckpt_path)
-                    accelerator.print(f"Loaded discriminator checkpoint for {instr} from {ckpt_path}")
+                    accelerator.print(
+                        f"Loaded discriminator checkpoint for {instr} from {ckpt_path}"
+                    )
                 else:
                     accelerator.print(f"Warning: checkpoint not found for {instr} at {ckpt_path}")
-            
+
             disc_wrapper.train()
             accelerator.print(f"Stem '{instr}': Discriminator type '{input_type}'")
             discriminators.append(disc_wrapper)
-        
+
         # Prepare all discriminators (skip None)
         discriminators = [accelerator.prepare(d) if d is not None else None for d in discriminators]
 
     # MelSpectrogram for discriminator (only needed for mel input type)
     mel = None
     to_db = None
-    if args.use_discriminator and any(m == 'mel' for m in gan_models if m is not None):
+    if args.use_discriminator and any(m == "mel" for m in gan_models if m is not None):
         sr = 44100
         n_fft = 2048
         hop = 441
         n_mels = 128
 
         mel = torchaudio.transforms.MelSpectrogram(
-            sample_rate=sr,
-            n_fft=n_fft,
-            hop_length=hop,
-            n_mels=n_mels,
-            power=2.0
+            sample_rate=sr, n_fft=n_fft, hop_length=hop, n_mels=n_mels, power=2.0
         ).to(accelerator.device)
 
-        to_db = torchaudio.transforms.AmplitudeToDB(stype="power", top_db=130).to(accelerator.device)
+        to_db = torchaudio.transforms.AmplitudeToDB(stype="power", top_db=130).to(
+            accelerator.device
+        )
 
     def wave_BC_to_mel(w):  # w: [B, C, T]
         # Mel output: [B, C, n_mels, F]
         m = mel(w) + 1e-5
-        m = to_db(m)                     # [B, C, n_mels, F]
-        m = m.permute(0, 1, 3, 2)        # [B, C, F, n_mels]
+        m = to_db(m)  # [B, C, n_mels, F]
+        m = m.permute(0, 1, 3, 2)  # [B, C, F, n_mels]
         B, C, F, M = m.shape
-        return m.reshape(B * C, F, M)    # [B*C, F, n_mels] = [B*C, frames, n_mels]
+        return m.reshape(B * C, F, M)  # [B*C, F, n_mels] = [B*C, frames, n_mels]
 
     def samp_to_frames(Ls, C):
         Lf = torch.ceil(Ls.float() / hop).long()
         return Lf.repeat_interleave(C)
-    
+
     def wave_BC_to_wave_B(w):  # w: [B, C, T]
         # Convert stereo audio to flattened batch dimension: [B*C, T]
         B, C, T = w.shape
         return w.reshape(B * C, T)
+
     # End of MelSpectrogram for discriminator
-    
-    
+
     # Diffusion model setup
     diffusion_wrappers = []
     if args.use_diffusion:
-        diffusion_model_raw = getattr(config.training, 'diffusion_model', None)
+        diffusion_model_raw = getattr(config.training, "diffusion_model", None)
         num_stems = len(config.training.instruments)
         diffusion_models = []
         if diffusion_model_raw is None:
-            accelerator.print("Warning: diffusion_model not found in config, using default 'dit' for all stems")
-            diffusion_models = ['dit'] * num_stems
+            accelerator.print(
+                "Warning: diffusion_model not found in config, using default 'dit' for all stems"
+            )
+            diffusion_models = ["dit"] * num_stems
         elif len(diffusion_model_raw) != num_stems:
-            raise ValueError(f"diffusion_model length ({len(diffusion_model_raw)}) must match number of instruments ({num_stems})")
+            raise ValueError(
+                f"diffusion_model length ({len(diffusion_model_raw)}) must match number of instruments ({num_stems})"
+            )
         else:
             diffusion_models = diffusion_model_raw
-        
-        accelerator.print(f"Creating diffusion models for {num_stems} stems with types: {diffusion_models}")
-        
-        for idx, (instr, diffusion_type) in enumerate(zip(config.training.instruments, diffusion_models)):
-            if diffusion_type is None or diffusion_type.lower() == 'none':
+
+        accelerator.print(
+            f"Creating diffusion models for {num_stems} stems with types: {diffusion_models}"
+        )
+
+        for idx, (instr, diffusion_type) in enumerate(
+            zip(config.training.instruments, diffusion_models)
+        ):
+            if diffusion_type is None or diffusion_type.lower() == "none":
                 diffusion_wrappers.append(None)
                 accelerator.print(f"Stem '{instr}': No diffusion model (None)")
                 continue
-            
-            diff_cfg = DiffusionConfig()
-            
+
+            diffusion_options = dict(getattr(config.training, "diffusion_options", {}))
+            diffusion_options["model_type"] = diffusion_type
+            diff_cfg = DiffusionConfig(**diffusion_options)
+
             diff_wrapper = DiffusionWrapper(diff_cfg, accelerator)
-            
+
             # Load checkpoint if provided
-            if args.diffusion_model_path != '':
-                ckpt_path = os.path.join(args.diffusion_model_path, f'{instr}_diffusion.pth')
+            if args.diffusion_model_path != "":
+                ckpt_path = os.path.join(args.diffusion_model_path, f"{instr}_diffusion.pth")
                 if os.path.exists(ckpt_path):
                     diff_wrapper.load_checkpoint(ckpt_path)
                     accelerator.print(f"Loaded diffusion checkpoint for {instr} from {ckpt_path}")
                 else:
-                    accelerator.print(f"Warning: diffusion checkpoint not found for {instr} at {ckpt_path}")
-            
+                    accelerator.print(
+                        f"Warning: diffusion checkpoint not found for {instr} at {ckpt_path}"
+                    )
+
             diff_wrapper.train()
             accelerator.print(f"Stem '{instr}': Diffusion model type '{diffusion_type}'")
             diffusion_wrappers.append(diff_wrapper)
 
-        diffusion_wrappers = [accelerator.prepare(d) if d is not None else None for d in diffusion_wrappers]
+        diffusion_wrappers = [
+            accelerator.prepare(d) if d is not None else None for d in diffusion_wrappers
+        ]
     # End of Diffusion model setup
 
     optim_params = dict()
-    if 'optimizer' in config:
-        optim_params = dict(config['optimizer'])
-        accelerator.print('Optimizer params from config:\n{}'.format(optim_params))
+    if "optimizer" in config:
+        optim_params = dict(config["optimizer"])
+        accelerator.print("Optimizer params from config:\n{}".format(optim_params))
 
-    if config.training.optimizer == 'adam':
+    if config.training.optimizer == "adam":
         optimizer = Adam(model.parameters(), lr=config.training.lr, **optim_params)
-    elif config.training.optimizer == 'adamw':
+    elif config.training.optimizer == "adamw":
         optimizer = AdamW(model.parameters(), lr=config.training.lr, **optim_params)
-    elif config.training.optimizer == 'radam':
+    elif config.training.optimizer == "radam":
         optimizer = RAdam(model.parameters(), lr=config.training.lr, **optim_params)
-    elif config.training.optimizer == 'rmsprop':
+    elif config.training.optimizer == "rmsprop":
         optimizer = RMSprop(model.parameters(), lr=config.training.lr, **optim_params)
-    elif config.training.optimizer == 'prodigy':
+    elif config.training.optimizer == "prodigy":
         from prodigyopt import Prodigy
+
         # you can choose weight decay value based on your problem, 0 by default
         # We recommend using lr=1.0 (default) for all networks.
         optimizer = Prodigy(model.parameters(), lr=config.training.lr, **optim_params)
-    elif config.training.optimizer == 'adamw8bit':
+    elif config.training.optimizer == "adamw8bit":
         import bitsandbytes as bnb
+
         optimizer = bnb.optim.AdamW8bit(model.parameters(), lr=config.training.lr, **optim_params)
-    elif config.training.optimizer == 'sgd':
-        accelerator.print('Use SGD optimizer')
+    elif config.training.optimizer == "sgd":
+        accelerator.print("Use SGD optimizer")
         optimizer = SGD(model.parameters(), lr=config.training.lr, **optim_params)
     else:
-        accelerator.print('Unknown optimizer: {}'.format(config.training.optimizer))
+        accelerator.print("Unknown optimizer: {}".format(config.training.optimizer))
         exit()
 
     if accelerator.is_main_process:
-        print('Processes GPU: {}'.format(accelerator.num_processes))
-        print("Patience: {} Reduce factor: {} Batch size: {} Optimizer: {}".format(
-            config.training.patience,
-            config.training.reduce_factor,
-            batch_size,
-            config.training.optimizer,
-        ))
+        print("Processes GPU: {}".format(accelerator.num_processes))
+        print(
+            "Patience: {} Reduce factor: {} Batch size: {} Optimizer: {}".format(
+                config.training.patience,
+                config.training.reduce_factor,
+                batch_size,
+                config.training.optimizer,
+            )
+        )
     # Reduce LR if no SDR improvements for several epochs
     scheduler = ReduceLROnPlateau(
         optimizer,
-        'max',
+        "max",
         # patience=accelerator.num_processes * config.training.patience, # This is strange place...
         patience=config.training.patience,
-        factor=config.training.reduce_factor
+        factor=config.training.reduce_factor,
     )
 
     if args.use_multistft_loss:
@@ -444,63 +485,71 @@ def train_model(args):
             loss_options = dict(config.loss_multistft)
         except Exception:
             loss_options = dict()
-        accelerator.print('Loss options: {}'.format(loss_options))
-        loss_multistft = auraloss.freq.MultiResolutionSTFTLoss(
-            **loss_options
-        )
+        accelerator.print("Loss options: {}".format(loss_options))
+        loss_multistft = auraloss.freq.MultiResolutionSTFTLoss(**loss_options)
 
     # Fix 4: reorder prepare sequence - prepare model and optimizer first
     # This ensures model replicas are correctly placed on all GPUs
     model, optimizer = accelerator.prepare(model, optimizer)
     train_loader, scheduler = accelerator.prepare(train_loader, scheduler)
     valid_loader = accelerator.prepare(valid_loader)
-    
+
     accelerator.print(f"[DEBUG] Model prepared on device: {next(model.parameters()).device}")
 
     def gather_sdr_metrics(accelerator, sdr_dict):
         result = {}
         for instr, values in sdr_dict.items():
             dtype = values[0].dtype if values else torch.float32
-            local_tensor = torch.cat(values, dim=0) if values else torch.empty(0, device=accelerator.device, dtype=dtype)
+            local_tensor = (
+                torch.cat(values, dim=0)
+                if values
+                else torch.empty(0, device=accelerator.device, dtype=dtype)
+            )
             result[instr] = accelerator.gather_for_metrics(local_tensor).cpu()
         return result
 
     if args.pre_valid:
-        metrics_dict = valid(model, valid_loader, args, config, device, verbose=accelerator.is_main_process)
-        
+        metrics_dict = valid(
+            model, valid_loader, args, config, device, verbose=accelerator.is_main_process
+        )
+
         # Gather metrics from all processes
         gathered_metrics = {}
         for metric_name, metric_data in metrics_dict.items():
             gathered_metrics[metric_name] = gather_sdr_metrics(accelerator, metric_data)
-        
+
         accelerator.wait_for_everyone()
 
         instruments = prefer_target_instrument(config)
-        
+
         # Print all metrics
         for metric_name in metric_list:
             metric_avg = 0.0
             for instr in instruments:
                 metric_data = gathered_metrics[metric_name][instr].numpy()
                 metric_val = metric_data[:valid_dataset_length].mean()
-                accelerator.print("Instr {} {}: {:.4f}".format(instr, metric_name.upper(), metric_val))
+                accelerator.print(
+                    "Instr {} {}: {:.4f}".format(instr, metric_name.upper(), metric_val)
+                )
                 metric_avg += metric_val
-            
+
             metric_avg /= len(instruments)
             if len(instruments) > 1:
-                accelerator.print('{} Avg: {:.4f}'.format(metric_name.upper(), metric_avg))
-        
+                accelerator.print("{} Avg: {:.4f}".format(metric_name.upper(), metric_avg))
+
         metrics_dict = None
         gathered_metrics = None
 
-    accelerator.print('Train for: {}'.format(config.training.num_epochs))
+    accelerator.print("Train for: {}".format(config.training.num_epochs))
     best_sdr = 0
-    best_si_sdr = -float('inf')  # Track SI-SDR
+    best_si_sdr = -float("inf")  # Track SI-SDR
     current_step = 0
     for epoch in range(config.training.num_epochs):
         model.train()
-        accelerator.print('Train epoch: {} Learning rate: {}'.format(epoch, optimizer.param_groups[0]['lr']))
-        loss_val = 0.
+        accelerator.print(
+            "Train epoch: {} Learning rate: {}".format(epoch, optimizer.param_groups[0]["lr"])
+        )
+        loss_val = 0.0
         total = 0
 
         pbar = tqdm(train_loader, disable=not accelerator.is_main_process, ncols=130)
@@ -508,7 +557,13 @@ def train_model(args):
             y = batch
             x = mixes
 
-            if args.model_type in ['mel_band_roformer', 'bs_roformer', 'mel_band_roformer_disc', 'td_mel_band_roformer', 'band_conditioned_mel_band_roformer']:
+            if args.model_type in [
+                "mel_band_roformer",
+                "bs_roformer",
+                "mel_band_roformer_disc",
+                "td_mel_band_roformer",
+                "band_conditioned_mel_band_roformer",
+            ]:
                 # loss is computed in forward pass
                 loss, y_ = model(x, y)
             else:
@@ -523,171 +578,213 @@ def train_model(args):
                     if args.use_l1_loss:
                         loss += 1000 * F.l1_loss(y1_, y1)
                     if args.use_frequency_weighted_loss:
-                        pass                    
+                        pass
                 elif args.use_mse_loss:
                     loss = nn.MSELoss()(y_, y)
                 elif args.use_l1_loss:
                     loss = F.l1_loss(y_, y)
                 else:
                     loss = masked_loss(
-                        y_,
-                        y,
-                        q=config.training.q,
-                        coarse=config.training.coarse_loss_clip
+                        y_, y, q=config.training.q, coarse=config.training.coarse_loss_clip
                     )
-                    
+
             # Discriminator training step - supports multiple discriminators
             if args.use_discriminator:
                 B, I, C, T = y_.shape
                 num_stems = len(config.training.instruments)
                 assert I == num_stems, f"Expected {num_stems} stems, got {I}"
-                
+
                 total_gan_loss = 0.0
                 total_fm_loss = 0.0
                 disc_losses_dict = {}
                 gen_losses_dict = {}
-                
+
                 # Frame length (only required for mel type)
                 len_samples = torch.full((B,), T, device=y_.device, dtype=torch.long)
                 len_frames = samp_to_frames(len_samples, C) if mel is not None else None
-                
-                for stem_idx, (disc, input_type, instr) in enumerate(zip(discriminators, gan_models, config.training.instruments)):
+
+                for stem_idx, (disc, input_type, instr) in enumerate(
+                    zip(discriminators, gan_models, config.training.instruments)
+                ):
                     # Skip stems without a discriminator
-                    if disc is None or input_type is None or input_type.lower() == 'none':
+                    if disc is None or input_type is None or input_type.lower() == "none":
                         continue
-                    
+
                     # Extract real/fake tensors for current stem: [B, C, T]
                     fake_stem = y_[:, stem_idx, :, :]
                     real_stem = y[:, stem_idx, :, :]
-                    
+
                     # Prepare discriminator inputs based on input_type
-                    if input_type == 'mel':
+                    if input_type == "mel":
                         fake_input = wave_BC_to_mel(fake_stem)
                         real_input = wave_BC_to_mel(real_stem)
                         length_input = len_frames
-                    elif input_type in ['wave', 'music']:
+                    elif input_type in ["wave", "music"]:
                         # wave/music discriminator expects [B*C, T]
                         fake_input = wave_BC_to_wave_B(fake_stem)
                         real_input = wave_BC_to_wave_B(real_stem)
                         length_input = None  # wave discriminator does not require lengths
                     else:
                         raise ValueError(f"Unknown input_type: {input_type}")
-                    
+
                     # 1) Update discriminator
-                    d_losses = disc.train_step(fake_input, real_input, length_input, current_step=current_step)
-                    disc_losses_dict[f'disc_{instr}'] = d_losses.get('disc_loss', 0.0)
-                    
+                    d_losses = disc.train_step(
+                        fake_input,
+                        real_input,
+                        length_input,
+                        current_step=current_step,
+                        compute_generator_losses=False,
+                    )
+                    disc_losses_dict[f"disc_{instr}"] = d_losses.get("disc_loss", 0.0)
+
                     # 2) Freeze discriminator, compute generator losses
                     for p in disc.discriminator.parameters():
                         p.requires_grad = False
-                    
-                    g_losses = disc.get_generator_losses(fake_input, real_input, length_input, current_step=current_step)
-                    
-                    gan_loss = g_losses.get('gan_loss', 0.0)
-                    fm_loss = g_losses.get('hdn_loss', 0.0)
-                    
+
+                    g_losses = disc.get_generator_losses(
+                        fake_input, real_input, length_input, current_step=current_step
+                    )
+
+                    gan_loss = g_losses.get("gan_loss", 0.0)
+                    fm_loss = g_losses.get("hdn_loss", 0.0)
+
                     total_gan_loss += gan_loss
                     total_fm_loss += fm_loss
-                    
-                    gen_losses_dict[f'gen_{instr}_gan'] = gan_loss.item() if isinstance(gan_loss, torch.Tensor) else gan_loss
-                    gen_losses_dict[f'gen_{instr}_fm'] = fm_loss.item() if isinstance(fm_loss, torch.Tensor) else fm_loss
-                    
+
+                    gen_losses_dict[f"gen_{instr}_gan"] = (
+                        gan_loss.item() if isinstance(gan_loss, torch.Tensor) else gan_loss
+                    )
+                    gen_losses_dict[f"gen_{instr}_fm"] = (
+                        fm_loss.item() if isinstance(fm_loss, torch.Tensor) else fm_loss
+                    )
+
                     # 3) Unfreeze discriminator
                     for p in disc.discriminator.parameters():
                         p.requires_grad = True
-                
-                    # Accumulate into total loss
-                    loss = loss + total_gan_loss + total_fm_loss
+
+                # Add each stem's auxiliary losses exactly once.
+                loss = loss + total_gan_loss + total_fm_loss
 
             if args.use_diffusion:
                 B, I, C, T = y_.shape
                 diffusion_losses_dict = {}
                 num_stems = len(config.training.instruments)
                 assert I == num_stems, f"Expected {num_stems} stems, got {I}"
-                                
-                for stem_idx, (diff_model, instr) in enumerate(zip(diffusion_wrappers, config.training.instruments)):
+
+                for stem_idx, (diff_model, instr) in enumerate(
+                    zip(diffusion_wrappers, config.training.instruments)
+                ):
                     if diff_model is None:
                         continue
-                    
+
                     # Extract predicted tensors for current stem: [B, C, T]
                     pred_stem = y_[:, stem_idx, :, :]
                     target_stem = y[:, stem_idx, :, :]
-                    
-                    diffusion_loss = diff_model.train_step_dual(pred_stem, target_stem, current_step=current_step)
-                    diffusion_losses_dict[f'diff_{instr}_loss'] = diffusion_loss.item() if isinstance(diffusion_loss, torch.Tensor) else diffusion_loss
-                
+
+                    diffusion_losses = diff_model.train_step_dual(
+                        pred_stem, target_stem, current_step=current_step
+                    )
+                    diffusion_losses_dict[f"diff_{instr}_loss"] = diffusion_losses[
+                        "diffusion_loss"
+                    ].item()
+
             accelerator.backward(loss)
             if config.training.grad_clip:
                 accelerator.clip_grad_norm_(model.parameters(), config.training.grad_clip)
 
             optimizer.step()
             optimizer.zero_grad()
-            
+
             li = loss.item()
             loss_val += li
             total += 1
             if accelerator.is_main_process:
-                log_dict = {'loss': 100 * li, 'avg_loss': 100 * loss_val / (i + 1), 'total': total, 'loss_val': loss_val, 'i': i}
-                
+                log_dict = {
+                    "loss": 100 * li,
+                    "avg_loss": 100 * loss_val / (i + 1),
+                    "total": total,
+                    "loss_val": loss_val,
+                    "i": i,
+                }
+
                 # Add discriminator losses to logging
                 if args.use_discriminator:
                     log_dict.update(disc_losses_dict)
                     log_dict.update(gen_losses_dict)
-                    log_dict['total_gan_loss'] = total_gan_loss.item() if isinstance(total_gan_loss, torch.Tensor) else total_gan_loss
-                    log_dict['total_fm_loss'] = total_fm_loss.item() if isinstance(total_fm_loss, torch.Tensor) else total_fm_loss
-                
+                    log_dict["total_gan_loss"] = (
+                        total_gan_loss.item()
+                        if isinstance(total_gan_loss, torch.Tensor)
+                        else total_gan_loss
+                    )
+                    log_dict["total_fm_loss"] = (
+                        total_fm_loss.item()
+                        if isinstance(total_fm_loss, torch.Tensor)
+                        else total_fm_loss
+                    )
+
                 # Add diffusion losses to logging
                 if args.use_diffusion:
                     log_dict.update(diffusion_losses_dict)
-                
+
                 wandb.log(log_dict)
-                pbar.set_postfix({'loss': 100 * li, 'avg_loss': 100 * loss_val / (i + 1)})
-                
+                pbar.set_postfix({"loss": 100 * li, "avg_loss": 100 * loss_val / (i + 1)})
+
             # Save latest discriminator/diffusion checkpoints periodically
-            if (args.use_discriminator or args.use_diffusion) and (current_step + 1) % getattr(config.training, 'save_interval', 1000) == 0 and accelerator.is_main_process:
+            if (
+                (args.use_discriminator or args.use_diffusion)
+                and (current_step + 1) % getattr(config.training, "save_interval", 1000) == 0
+                and accelerator.is_main_process
+            ):
                 ckpt_dir = os.path.join(args.results_path, "last_additional_model_ckpt")
                 os.makedirs(ckpt_dir, exist_ok=True)
                 for disc, instr in zip(discriminators, config.training.instruments):
                     if disc is not None:  # save only non-None discriminators
-                        disc.save_checkpoint(os.path.join(ckpt_dir, f'{instr}.pth'))
+                        disc.save_checkpoint(os.path.join(ckpt_dir, f"{instr}.pth"))
                 accelerator.print(f"Discriminator checkpoints saved to {ckpt_dir}")
-                
+
                 for diff_model, instr in zip(diffusion_wrappers, config.training.instruments):
                     if diff_model is not None:
-                        diff_model.save_checkpoint(os.path.join(ckpt_dir, f'{instr}_diffusion.pth'))
+                        diff_model.save_checkpoint(os.path.join(ckpt_dir, f"{instr}_diffusion.pth"))
                 accelerator.print(f"Diffusion model checkpoints saved to {ckpt_dir}")
-            
+
             current_step += 1
 
         if accelerator.is_main_process:
-            print('Training loss: {:.6f}'.format(loss_val / total))
-            wandb.log({'train_loss': loss_val / total, 'epoch': epoch})
+            print("Training loss: {:.6f}".format(loss_val / total))
+            wandb.log({"train_loss": loss_val / total, "epoch": epoch})
 
         # Save last
-        store_path = args.results_path + '/last_{}.ckpt'.format(args.model_type)
+        store_path = args.results_path + "/last_{}.ckpt".format(args.model_type)
         accelerator.wait_for_everyone()
         if accelerator.is_main_process:
             unwrapped_model = accelerator.unwrap_model(model)
             accelerator.save(unwrapped_model.state_dict(), store_path)
 
-        metrics_dict = valid(model, valid_loader, args, config, device, 
-                             verbose=accelerator.is_main_process, diffusion_wrapper=diffusion_wrappers if args.use_diffusion else None, 
-                             current_step=current_step)
-        
+        metrics_dict = valid(
+            model,
+            valid_loader,
+            args,
+            config,
+            device,
+            verbose=accelerator.is_main_process,
+            diffusion_wrapper=diffusion_wrappers if args.use_diffusion else None,
+            current_step=current_step,
+        )
+
         # Gather metrics from all processes
         gathered_metrics = {}
         for metric_name, metric_data in metrics_dict.items():
             gathered_metrics[metric_name] = gather_sdr_metrics(accelerator, metric_data)
-        
+
         accelerator.wait_for_everyone()
 
         # Compute averages for all metrics
         sdr_avg = 0.0
         si_sdr_avg = 0.0
         instruments = prefer_target_instrument(config)
-        
+
         metrics_to_log = {}
-        
+
         for metric_name in metric_list:
             metric_avg = 0.0
             for instr in instruments:
@@ -695,42 +792,48 @@ def train_model(args):
                     print(gathered_metrics[metric_name][instr])
                 metric_data = gathered_metrics[metric_name][instr].numpy()
                 metric_val = metric_data[:valid_dataset_length].mean()
-                
+
                 if accelerator.is_main_process:
-                    print("Instr {} {}: {:.4f} Debug: {}".format(instr, metric_name.upper(), metric_val, len(metric_data)))
-                    metrics_to_log[f'{instr}_{metric_name}'] = metric_val
-                
+                    print(
+                        "Instr {} {}: {:.4f} Debug: {}".format(
+                            instr, metric_name.upper(), metric_val, len(metric_data)
+                        )
+                    )
+                    metrics_to_log[f"{instr}_{metric_name}"] = metric_val
+
                 metric_avg += metric_val
-            
+
             metric_avg /= len(instruments)
-            
+
             # Save SDR and SI-SDR averages
-            if metric_name == 'sdr':
+            if metric_name == "sdr":
                 sdr_avg = metric_avg
-            elif metric_name == 'si_sdr':
+            elif metric_name == "si_sdr":
                 si_sdr_avg = metric_avg
-            
+
             if accelerator.is_main_process:
-                metrics_to_log[f'{metric_name}_avg'] = metric_avg
+                metrics_to_log[f"{metric_name}_avg"] = metric_avg
                 if len(instruments) > 1:
-                    print('{} Avg: {:.4f}'.format(metric_name.upper(), metric_avg))
-        
+                    print("{} Avg: {:.4f}".format(metric_name.upper(), metric_avg))
+
         # Log all metrics to wandb
         if accelerator.is_main_process:
-            metrics_to_log['best_sdr'] = best_sdr
-            metrics_to_log['best_si_sdr'] = best_si_sdr
-            metrics_to_log['epoch'] = epoch
+            metrics_to_log["best_sdr"] = best_sdr
+            metrics_to_log["best_si_sdr"] = best_si_sdr
+            metrics_to_log["epoch"] = epoch
             wandb.log(metrics_to_log)
 
         # Save best checkpoint using SI-SDR
         if accelerator.is_main_process:
             if si_sdr_avg > best_si_sdr:
-                store_path = args.results_path + '/model_{}_ep_{}_sisdr_{:.4f}.ckpt'.format(args.model_type, epoch, si_sdr_avg)
-                print('Store weights (Best SI-SDR): {}'.format(store_path))
+                store_path = args.results_path + "/model_{}_ep_{}_sisdr_{:.4f}.ckpt".format(
+                    args.model_type, epoch, si_sdr_avg
+                )
+                print("Store weights (Best SI-SDR): {}".format(store_path))
                 unwrapped_model = accelerator.unwrap_model(model)
                 accelerator.save(unwrapped_model.state_dict(), store_path)
                 best_si_sdr = si_sdr_avg
-            
+
             # Also keep best SDR (optional)
             if sdr_avg > best_sdr:
                 best_sdr = sdr_avg

@@ -15,11 +15,23 @@ def parse_args(dict_args: Union[Dict, None]) -> argparse.Namespace:
         Namespace object containing parsed arguments and their values.
     """
 
-    parser = argparse.ArgumentParser(description="Copy mixture files from VALID_PATH to INFERENCE_DIR")
-    parser.add_argument('--valid_path', type=str, help="Directory with valid tracks")
-    parser.add_argument('--inference_dir', type=str, help="Directory to save inference tracks")
-    parser.add_argument('--mixture_name', type=str, default='mixture.wav', help="Name of mixture tracks (default: 'mixture.wav')")
-    parser.add_argument('--max_mixtures', type=int, default=float('inf'), help="Maximum number of mixtures to process.")
+    parser = argparse.ArgumentParser(
+        description="Copy mixture files from VALID_PATH to INFERENCE_DIR"
+    )
+    parser.add_argument("--valid_path", type=str, help="Directory with valid tracks")
+    parser.add_argument("--inference_dir", type=str, help="Directory to save inference tracks")
+    parser.add_argument(
+        "--mixture_name",
+        type=str,
+        default="mixture.wav",
+        help="Name of mixture tracks (default: 'mixture.wav')",
+    )
+    parser.add_argument(
+        "--max_mixtures",
+        type=int,
+        default=float("inf"),
+        help="Maximum number of mixtures to process.",
+    )
 
     if dict_args is not None:
         args = parser.parse_args([])
@@ -75,5 +87,5 @@ def copying_files(args: Optional[argparse.Namespace] = None) -> None:
     print("Copying ends.")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     copying_files(None)

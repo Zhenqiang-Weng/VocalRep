@@ -8,7 +8,7 @@ Activate the project environment and install the development dependencies:
 
 ```bash
 conda activate mss
-python -m pip install -r requirements-dev.txt
+python -m pip install -r requirements.txt -r requirements-dev.txt
 ```
 
 ## Checks
@@ -17,7 +17,10 @@ Run at least the following checks before submitting a change:
 
 ```bash
 ruff check .
-python -m compileall -q .
+ruff format --check .
+python scripts/check_english_comments.py
+python -m pytest -q
+python -m compileall -q -x '/(\.venv|checkpoints|test_sample|results)/' .
 bash -n train_accelerate.sh infer_with_spk.sh
 ```
 
@@ -26,6 +29,7 @@ Changes to a model or data pipeline should also be verified with a small represe
 ## Code conventions
 
 - Target Python 3.10, use four-space indentation, and save text files as UTF-8 with LF line endings.
+- Use English for comments, docstrings, and diagnostic messages. Run `ruff format .` before submitting Python changes.
 - Add clear type annotations and docstrings to new public functions.
 - Pass paths, GPU IDs, credentials, and server addresses through command-line arguments or environment variables; do not hard-code them in source files.
 - Do not commit datasets, logs, caches, exported artifacts, or local editor settings.

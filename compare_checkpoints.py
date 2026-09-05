@@ -31,6 +31,7 @@ def redirect_stdout(filepath: str, tee: bool = False, encoding: str = "utf-8"):
     f = open(filepath, "w", encoding=encoding)
 
     if tee:
+
         class Tee:
             def __init__(self, a, b):
                 self.a, self.b = a, b
@@ -65,7 +66,15 @@ def extract_state_dict(obj):
     """
     if isinstance(obj, dict):
         # Common containers
-        for k in ["state_dict", "model_state_dict", "model", "net", "weights", "params", "ema_state_dict"]:
+        for k in [
+            "state_dict",
+            "model_state_dict",
+            "model",
+            "net",
+            "weights",
+            "params",
+            "ema_state_dict",
+        ]:
             if k in obj and isinstance(obj[k], (dict, OrderedDict)):
                 sd = obj[k]
                 if len(sd) > 0 and all(isinstance(v, torch.Tensor) for v in sd.values()):
@@ -80,7 +89,11 @@ def extract_state_dict(obj):
         best_k = None
         best_n = -1
         for k, v in obj.items():
-            if isinstance(v, (dict, OrderedDict)) and len(v) > 0 and all(isinstance(vv, torch.Tensor) for vv in v.values()):
+            if (
+                isinstance(v, (dict, OrderedDict))
+                and len(v) > 0
+                and all(isinstance(vv, torch.Tensor) for vv in v.values())
+            ):
                 if len(v) > best_n:
                     best = v
                     best_k = k
@@ -107,7 +120,7 @@ def normalize_keys(sd: OrderedDict, strip_prefixes=True):
             changed = False
             for p in COMMON_PREFIXES:
                 if nk.startswith(p):
-                    nk = nk[len(p):]
+                    nk = nk[len(p) :]
                     changed = True
         new_sd[nk] = v
     return new_sd
@@ -177,13 +190,26 @@ def main():
         default="results/results_spk_mel_roformer-with-large-window/model_speaker_mel_band_roformer_exportable_ep_0_sdr_0.5771.ckpt",
         help="Path to checkpoint B",
     )
-    ap.add_argument("--print_max", type=int, default=100, help="Max number of keys to print shapes for each ckpt")
-    ap.add_argument("--no_strip_prefix", action="store_true", help="Do not strip common prefixes when comparing")
-    ap.add_argument("--topk", type=int, default=100, help="Show top-K largest differences by max_abs")
+    ap.add_argument(
+        "--print_max",
+        type=int,
+        default=100,
+        help="Max number of keys to print shapes for each ckpt",
+    )
+    ap.add_argument(
+        "--no_strip_prefix", action="store_true", help="Do not strip common prefixes when comparing"
+    )
+    ap.add_argument(
+        "--topk", type=int, default=100, help="Show top-K largest differences by max_abs"
+    )
 
     # Write prints to file
-    ap.add_argument("--out", type=str, default="./cache/compare_ckpt.log", help="Write all prints to this file")
-    ap.add_argument("--tee", action="store_true", help="Also print to console while writing to file")
+    ap.add_argument(
+        "--out", type=str, default="./cache/compare_ckpt.log", help="Write all prints to this file"
+    )
+    ap.add_argument(
+        "--tee", action="store_true", help="Also print to console while writing to file"
+    )
 
     args = ap.parse_args()
 
@@ -191,7 +217,9 @@ def main():
         print("=== Compare Checkpoints ===")
         print(f"A: {args.a}")
         print(f"B: {args.b}")
-        print(f"print_max={args.print_max}  topk={args.topk}  strip_prefix={not args.no_strip_prefix}")
+        print(
+            f"print_max={args.print_max}  topk={args.topk}  strip_prefix={not args.no_strip_prefix}"
+        )
         print("")
 
         ckptA = load_ckpt(args.a)
@@ -215,9 +243,13 @@ def main():
         if strip:
             # detect collisions crudely: if stripping changes counts, collision may have happened
             if len(sdA) != len(sdA_raw):
-                print("\n[WARN] A: key collisions may have occurred after prefix stripping (some keys overwritten).")
+                print(
+                    "\n[WARN] A: key collisions may have occurred after prefix stripping (some keys overwritten)."
+                )
             if len(sdB) != len(sdB_raw):
-                print("\n[WARN] B: key collisions may have occurred after prefix stripping (some keys overwritten).")
+                print(
+                    "\n[WARN] B: key collisions may have occurred after prefix stripping (some keys overwritten)."
+                )
 
         matched, onlyA, onlyB, shape_mismatch = match_keys(sdA, sdB)
 
@@ -271,7 +303,7 @@ def main():
         print(f"Sum(L2) over tensors: {sum_l2:.6g}")
 
         print(f"\n-- Top {args.topk} by max_abs --")
-        for i, (max_abs, mean_abs, l2, k, shape, dta, dtb) in enumerate(diffs[:args.topk], 1):
+        for i, (max_abs, mean_abs, l2, k, shape, dta, dtb) in enumerate(diffs[: args.topk], 1):
             print(
                 f"{i:3d}. {k:90s} shape={shape}  "
                 f"max_abs={max_abs:.6g}  mean_abs={mean_abs:.6g}  l2={l2:.6g}  "

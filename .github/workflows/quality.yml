@@ -30,8 +30,32 @@ jobs:
       - name: Run Ruff
         run: ruff check .
 
+      - name: Check Python formatting
+        run: ruff format --check .
+
+      - name: Check English comments
+        run: python scripts/check_english_comments.py
+
       - name: Compile Python sources
         run: python -m compileall -q .
 
       - name: Validate shell syntax
         run: bash -n train_accelerate.sh infer_with_spk.sh
+
+  regression-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+          submodules: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+      - name: Install CPU runtime and test dependencies
+        run: |
+          python -m pip install torch==2.11.0 torchaudio==2.11.0 --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -r requirements.txt -r requirements-dev.txt "accelerate>=1.0,<2"
+      - name: Run regression tests without downloading checkpoints
+        run: python -m pytest -q

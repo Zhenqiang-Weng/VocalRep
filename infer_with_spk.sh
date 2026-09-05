@@ -17,11 +17,9 @@ CHECKPOINT_PATH="${CHECKPOINT_PATH:-ckpts/multi_stem/model_spk_bs_roformer_ep_5_
 INPUT_FOLDER="${INPUT_FOLDER:-/path/to/input}"
 STORE_DIR="${STORE_DIR:-results/spk_inference}"
 
-# Speaker embedding extraction is maintained outside this repository. Either
-# edit the placeholder or export MSS_SPEAKER_SCRIPT before launching. A separate
-# Python environment can be selected with MSS_SPEAKER_PYTHON.
-MSS_SPEAKER_SCRIPT="${MSS_SPEAKER_SCRIPT:-/path/to/batch_extract_embeddings.py}"
-MSS_SPEAKER_PYTHON="${MSS_SPEAKER_PYTHON:-$PYTHON_BIN}"
+# Leave empty to download and verify the official pretrained CAM++ model.
+SPK_MODEL_PATH="${SPK_MODEL_PATH:-}"
+INFERENCE_BATCH_SIZE="${INFERENCE_BATCH_SIZE:-1}"
 
 # -----------------------------------------------------------------------------
 # Runtime settings
@@ -85,12 +83,10 @@ store_dir_abs="$(realpath -m -- "$STORE_DIR")"
 [[ "$store_dir_abs" != "$SCRIPT_DIR" ]] || \
     fail "STORE_DIR must be a dedicated output directory, not the repository root"
 
-is_placeholder "$MSS_SPEAKER_SCRIPT" && fail \
-    "set MSS_SPEAKER_SCRIPT to the external batch_extract_embeddings.py path"
-[[ -f "$MSS_SPEAKER_SCRIPT" ]] || fail \
-    "speaker extraction script does not exist: $MSS_SPEAKER_SCRIPT"
-require_executable "$MSS_SPEAKER_PYTHON"
-export MSS_SPEAKER_SCRIPT MSS_SPEAKER_PYTHON
+if [[ -n "$SPK_MODEL_PATH" ]]; then
+    [[ -d "$SPK_MODEL_PATH" ]] || fail "CAM++ model directory does not exist: $SPK_MODEL_PATH"
+fi
+[[ "$INFERENCE_BATCH_SIZE" =~ ^[1-9][0-9]*$ ]] || fail "INFERENCE_BATCH_SIZE must be positive"
 
 validate_boolean FORCE_CPU "$FORCE_CPU"
 validate_boolean EXTRACT_INSTRUMENTAL "$EXTRACT_INSTRUMENTAL"
@@ -143,8 +139,10 @@ inference_args=(
     --store_dir "$STORE_DIR"
     --device_ids "${logical_gpu_ids[@]}"
     --pcm_type "$PCM_TYPE"
+    --inference_batch_size "$INFERENCE_BATCH_SIZE"
 )
 
+[[ -n "$SPK_MODEL_PATH" ]] && inference_args+=(--spk_model_path "$SPK_MODEL_PATH")
 [[ "$FORCE_CPU" == true ]] && inference_args+=(--force_cpu)
 [[ "$EXTRACT_INSTRUMENTAL" == true ]] && inference_args+=(--extract_instrumental)
 [[ "$EXTRACT_OTHER" == true ]] && inference_args+=(--extract_other)

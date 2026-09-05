@@ -10,7 +10,9 @@ from math import exp
 
 
 def gaussian(window_size, sigma):
-    gauss = torch.Tensor([exp(-(x - window_size // 2) ** 2 / float(2 * sigma ** 2)) for x in range(window_size)])
+    gauss = torch.Tensor(
+        [exp(-((x - window_size // 2) ** 2) / float(2 * sigma**2)) for x in range(window_size)]
+    )
     return gauss / gauss.sum()
 
 
@@ -21,7 +23,7 @@ def create_window(window_size, channel):
     return window
 
 
-def _ssim(img1, img2, window, window_size, channel, reduction='mean'):
+def _ssim(img1, img2, window, window_size, channel, reduction="mean"):
     mu1 = F.conv2d(img1, window, padding=window_size // 2, groups=channel)
     mu2 = F.conv2d(img2, window, padding=window_size // 2, groups=channel)
 
@@ -33,24 +35,26 @@ def _ssim(img1, img2, window, window_size, channel, reduction='mean'):
     sigma2_sq = F.conv2d(img2 * img2, window, padding=window_size // 2, groups=channel) - mu2_sq
     sigma12 = F.conv2d(img1 * img2, window, padding=window_size // 2, groups=channel) - mu1_mu2
 
-    C1 = 0.01 ** 2
-    C2 = 0.03 ** 2
+    C1 = 0.01**2
+    C2 = 0.03**2
 
-    ssim_map = ((2 * mu1_mu2 + C1) * (2 * sigma12 + C2)) / ((mu1_sq + mu2_sq + C1) * (sigma1_sq + sigma2_sq + C2))
+    ssim_map = ((2 * mu1_mu2 + C1) * (2 * sigma12 + C2)) / (
+        (mu1_sq + mu2_sq + C1) * (sigma1_sq + sigma2_sq + C2)
+    )
 
-    if reduction == 'none':
+    if reduction == "none":
         return ssim_map
     else:
-        if reduction == 'mean':
+        if reduction == "mean":
             return ssim_map.mean()
-        elif reduction == 'avg':
+        elif reduction == "avg":
             return ssim_map.mean(1).mean(1).mean(1)
-        elif reduction == 'sum':
+        elif reduction == "sum":
             return ssim_map.sum()
 
 
 class SSIMLoss(torch.nn.Module):
-    def __init__(self, window_size=11, reduction='mean'):
+    def __init__(self, window_size=11, reduction="mean"):
         super(SSIMLoss, self).__init__()
         self.window_size = window_size
         self.reduction = reduction
@@ -71,12 +75,13 @@ class SSIMLoss(torch.nn.Module):
 
             self.window = window
             self.channel = channel
-        if self.reduction == 'sum':
-            return (1 - _ssim(img1, img2, window, self.window_size, channel, 'none')).sum()
+        if self.reduction == "sum":
+            return (1 - _ssim(img1, img2, window, self.window_size, channel, "none")).sum()
         else:
             return 1 - _ssim(img1, img2, window, self.window_size, channel, self.reduction)
 
-def ssim_loss(img1, img2, window_size=11, reduction='mean'):
+
+def ssim_loss(img1, img2, window_size=11, reduction="mean"):
     (_, channel, _, _) = img1.size()
     window = create_window(window_size, channel)
 
@@ -84,7 +89,7 @@ def ssim_loss(img1, img2, window_size=11, reduction='mean'):
         window = window.cuda(img1.get_device())
     window = window.type_as(img1)
 
-    if reduction == 'sum':
-        return (1 - _ssim(img1, img2, window, window_size, channel, 'none')).sum()
+    if reduction == "sum":
+        return (1 - _ssim(img1, img2, window, window_size, channel, "none")).sum()
     else:
         return 1 - _ssim(img1, img2, window, window_size, channel, reduction)

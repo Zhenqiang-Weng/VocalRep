@@ -3,6 +3,7 @@ from typing import Callable, Dict, Tuple, Optional
 import torch
 import torch.nn.functional as F
 
+
 @dataclass
 class STFTConfig:
     # === main STFT (match MelBandRoformer.stft_kwargs + window) ===
@@ -11,10 +12,10 @@ class STFTConfig:
     win_length: int = 2048
     normalized: bool = False
     center: bool = True
-    window_fn: Callable = torch.hann_window  
+    window_fn: Callable = torch.hann_window
 
     # === iSTFT output length control ===
-    istft_length: Optional[int] = None  
+    istft_length: Optional[int] = None
 
     # === audio meta ===
     stereo: bool = True
@@ -27,7 +28,7 @@ class STFTConfig:
     multi_hop_length: int = 147
     multi_normalized: bool = False
     multi_center: bool = True
-    multi_window_fn: Callable = torch.hann_window  
+    multi_window_fn: Callable = torch.hann_window
 
 
 class STFTProcessorBatch:
@@ -58,7 +59,9 @@ class STFTProcessorBatch:
 
         # 2) multi stft
         multi_weight = float(getattr(model, "multi_stft_resolution_loss_weight", 1.0))
-        multi_window_sizes = tuple(getattr(model, "multi_stft_resolutions_window_sizes", (4096, 2048, 1024, 512, 256)))
+        multi_window_sizes = tuple(
+            getattr(model, "multi_stft_resolutions_window_sizes", (4096, 2048, 1024, 512, 256))
+        )
         multi_kwargs = getattr(model, "multi_stft_kwargs", {})
         multi_hop = int(multi_kwargs.get("hop_length", 147))
         multi_norm = bool(multi_kwargs.get("normalized", False))
@@ -73,14 +76,11 @@ class STFTProcessorBatch:
             hop_length=hop_length,
             win_length=win_length,
             normalized=normalized,
-            center=True,                
-            window_fn=torch.hann_window, 
-
-            istft_length=istft_length,  
-
+            center=True,
+            window_fn=torch.hann_window,
+            istft_length=istft_length,
             stereo=stereo,
             num_stems=num_stems,
-
             use_multi_stft_loss=True,
             multi_weight=multi_weight,
             multi_window_sizes=multi_window_sizes,
@@ -99,7 +99,9 @@ class STFTProcessorBatch:
 
     def _get_multi_stft_window(self, window_size: int):
         if window_size not in self._multi_stft_windows:
-            self._multi_stft_windows[window_size] = self.config.multi_window_fn(window_size, device=self.device)
+            self._multi_stft_windows[window_size] = self.config.multi_window_fn(
+                window_size, device=self.device
+            )
         return self._multi_stft_windows[window_size]
 
     def stft_batch(self, audio: torch.Tensor) -> torch.Tensor:
@@ -120,7 +122,7 @@ class STFTProcessorBatch:
             window=self.window,
             center=self.config.center,
             normalized=self.config.normalized,
-            return_complex=True
+            return_complex=True,
         )
         stft_real = torch.view_as_real(stft_complex)  # (batch*ch, freq, time, 2)
 
@@ -131,7 +133,9 @@ class STFTProcessorBatch:
         stft_real = stft_real.view(batch_size, channels, freq_bins, time_frames, 2)
 
         # -> (batch, freq, ch, time, 2) -> (batch, freq*ch, time, 2)
-        stft_real = stft_real.permute(0, 2, 1, 3, 4).reshape(batch_size, freq_bins * channels, time_frames, 2)
+        stft_real = stft_real.permute(0, 2, 1, 3, 4).reshape(
+            batch_size, freq_bins * channels, time_frames, 2
+        )
 
         return stft_real
 
@@ -142,7 +146,7 @@ class STFTProcessorBatch:
         """
         batch_size, num_stems, freq_ch, time_frames, _ = masked_stft.shape
 
-        # 推断 channels
+        # Infer the channel count
         channels = 2 if self.config.stereo else 1
         freq_bins = freq_ch // channels
 
@@ -150,7 +154,9 @@ class STFTProcessorBatch:
         x = masked_stft.view(batch_size, num_stems, freq_bins, channels, time_frames, 2)
 
         # -> (b*n*ch, f, t, 2)
-        x = x.permute(0, 1, 3, 2, 4, 5).reshape(batch_size * num_stems * channels, freq_bins, time_frames, 2)
+        x = x.permute(0, 1, 3, 2, 4, 5).reshape(
+            batch_size * num_stems * channels, freq_bins, time_frames, 2
+        )
         x = torch.view_as_complex(x.contiguous())
 
         audio = torch.istft(
@@ -162,20 +168,24 @@ class STFTProcessorBatch:
             center=self.config.center,
             normalized=self.config.normalized,
             return_complex=False,
-            length=self.config.istft_length
+            length=self.config.istft_length,
         )
 
         return audio.view(batch_size, num_stems, channels, -1)
 
-    def compute_loss(self, recon_audio: torch.Tensor, target_audio: torch.Tensor,
-                     use_multi_stft: Optional[bool] = None) -> torch.Tensor:
+    def compute_loss(
+        self,
+        recon_audio: torch.Tensor,
+        target_audio: torch.Tensor,
+        use_multi_stft: Optional[bool] = None,
+    ) -> torch.Tensor:
         """
         recon_audio / target_audio: (batch, num_stems, channels, samples)
         """
         if use_multi_stft is None:
             use_multi_stft = self.config.use_multi_stft_loss
 
-        target_audio = target_audio[..., :recon_audio.shape[-1]]
+        target_audio = target_audio[..., : recon_audio.shape[-1]]
         loss = F.l1_loss(recon_audio, target_audio)
 
         if not use_multi_stft:

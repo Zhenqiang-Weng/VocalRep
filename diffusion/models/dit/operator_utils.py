@@ -7,6 +7,7 @@ from math import ceil, floor, log2
 from enum import Enum
 from .utils import exists
 
+
 # operations
 def sequence_mask(length, max_length=None):
     if max_length is None:
@@ -14,52 +15,58 @@ def sequence_mask(length, max_length=None):
     x = torch.arange(int(max_length), dtype=length.dtype, device=length.device)
     return x.unsqueeze(0) < length.unsqueeze(1)
 
+
 def lengths_to_mask(lengths, max_len=None, dtype=None):
     """
     Converts a "lengths" tensor to its binary mask representation.
-    
+
     Based on: https://discuss.pytorch.org/t/how-to-generate-variable-length-mask/23397
-     
+
     :lengths: N-dimensional tensor
     :returns: N*max_len dimensional tensor. If max_len==None, max_len=max(lengtsh)
     """
-    assert len(lengths.shape) == 1, 'Length shape should be 1 dimensional.'
+    assert len(lengths.shape) == 1, "Length shape should be 1 dimensional."
     max_len = max_len or lengths.max().item()
-    mask = torch.arange(
-        max_len,
-        device=lengths.device,
-        dtype=lengths.dtype).expand(len(lengths), max_len) < lengths.unsqueeze(1)
+    mask = torch.arange(max_len, device=lengths.device, dtype=lengths.dtype).expand(
+        len(lengths), max_len
+    ) < lengths.unsqueeze(1)
     if dtype is not None:
         mask = torch.as_tensor(mask, dtype=dtype, device=lengths.device)
     return mask
 
+
 def prod(vals: Sequence[int]) -> int:
     return reduce(lambda x, y: x * y, vals)
 
+
 def closest_power_2(x: float) -> int:
     exponent = log2(x)
-    distance_fn = lambda z: abs(x - 2 ** z)  # noqa
+    distance_fn = lambda z: abs(x - 2**z)  # noqa
     exponent_closest = min((floor(exponent), ceil(exponent)), key=distance_fn)
     return 2 ** int(exponent_closest)
+
 
 ## cfg
 def prob_mask_like(shape, prob, device):
     if prob == 1:
-        return torch.ones(shape, device = device, dtype = torch.bool)
+        return torch.ones(shape, device=device, dtype=torch.bool)
     elif prob == 0:
-        return torch.zeros(shape, device = device, dtype = torch.bool)
+        return torch.zeros(shape, device=device, dtype=torch.bool)
     else:
-        return torch.zeros(shape, device = device).float().uniform_(0, 1) < prob
-    
+        return torch.zeros(shape, device=device).float().uniform_(0, 1) < prob
+
+
 def l2norm(t):
-    return F.normalize(t, dim = -1)
+    return F.normalize(t, dim=-1)
+
 
 # ViT utils
 class Format(str, Enum):
-    NCHW = 'NCHW'
-    NHWC = 'NHWC'
-    NCL = 'NCL'
-    NLC = 'NLC'
+    NCHW = "NCHW"
+    NHWC = "NHWC"
+    NCL = "NCL"
+    NLC = "NLC"
+
 
 def nchw_to(x: torch.Tensor, fmt: Format):
     if fmt == Format.NHWC:
@@ -70,6 +77,7 @@ def nchw_to(x: torch.Tensor, fmt: Format):
         x = x.flatten(2)
     return x
 
+
 # helper classes
 class Identity(nn.Module):
     def __init__(self, *args, **kwargs):
@@ -79,12 +87,13 @@ class Identity(nn.Module):
         return x
 
 
-class Always():
+class Always:
     def __init__(self, val):
         self.val = val
 
     def __call__(self, *args, **kwargs):
         return self.val
+
 
 class Parallel(nn.Module):
     def __init__(self, *fns):
@@ -94,24 +103,21 @@ class Parallel(nn.Module):
     def forward(self, x):
         outputs = [fn(x) for fn in self.fns]
         return sum(outputs)
-    
-def resize_image_to(
-    image,
-    target_image_size,
-    clamp_range = None,
-    mode = 'nearest'
-):
+
+
+def resize_image_to(image, target_image_size, clamp_range=None, mode="nearest"):
     orig_image_size = image.shape[-1]
 
     if orig_image_size == target_image_size:
         return image
 
-    out = F.interpolate(image, target_image_size, mode = mode)
+    out = F.interpolate(image, target_image_size, mode=mode)
 
     if exists(clamp_range):
         out = out.clamp(*clamp_range)
 
     return out
+
 
 def reshape_for_broadcast(freqs_cis: torch.Tensor, x_shape):
     """
@@ -136,6 +142,7 @@ def reshape_for_broadcast(freqs_cis: torch.Tensor, x_shape):
     assert freqs_cis.shape == (x_shape[1], x_shape[-1])
     shape = [d if i == 1 or i == ndim - 1 else 1 for i, d in enumerate(x_shape)]
     return freqs_cis.view(*shape)
+
 
 class CheckpointFunction(torch.autograd.Function):
     @staticmethod
@@ -166,7 +173,8 @@ class CheckpointFunction(torch.autograd.Function):
         del ctx.input_params
         del output_tensors
         return (None, None) + input_grads
-    
+
+
 def checkpoint(func, inputs, params, flag):
     """
     Evaluate a function without caching intermediate activations, allowing for

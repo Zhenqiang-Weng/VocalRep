@@ -16,10 +16,12 @@ class L2NormalizationLayer(nn.Module):
     def forward(self, x):
         return F.normalize(x, p=2, dim=self.dim, eps=self.eps)
 
+
 class TimestepEmbedder(nn.Module):
     """
     Embeds scalar timesteps into vector representations. Same as timestep_embedding in unet2d_oai
     """
+
     def __init__(self, hidden_size, frequency_embedding_size=256):
         super().__init__()
         self.mlp = nn.Sequential(
@@ -54,22 +56,26 @@ class TimestepEmbedder(nn.Module):
         t_freq = self.timestep_embedding(t, self.frequency_embedding_size)
         t_emb = self.mlp(t_freq)
         return t_emb
-    
+
 
 class LabelEmbedder(nn.Module):
     """
     Embeds class labels into vector representations. Also handles label dropout for classifier-free guidance.
     in DiT: class_channels== time_embed_dim
     """
-    def __init__(self, 
-                 num_classes, 
-                 class_embed_dim,
-                 model_channels, 
-                 class_channels,
-                 ):
+
+    def __init__(
+        self,
+        num_classes,
+        class_embed_dim,
+        model_channels,
+        class_channels,
+    ):
         super().__init__()
 
-        assert num_classes is None or class_embed_dim is None, "Provide either num_classes or class_embed_dim, not both."
+        assert num_classes is None or class_embed_dim is None, (
+            "Provide either num_classes or class_embed_dim, not both."
+        )
         self.num_classes = num_classes
         self.null_classes_emb = nn.Parameter(torch.randn(1, model_channels))
 
@@ -80,14 +86,14 @@ class LabelEmbedder(nn.Module):
             # only embedding is provided
             self.class_embed_norm = L2NormalizationLayer()
             self.label_emb = nn.Linear(class_embed_dim, model_channels)
-            nn.init.normal_(self.null_classes_emb, 0, 1 / model_channels ** 0.5) # TODO: verify
-        
+            nn.init.normal_(self.null_classes_emb, 0, 1 / model_channels**0.5)  # TODO: verify
+
         self.class_to_cond = nn.Sequential(
-                nn.LayerNorm(model_channels),
-                nn.Linear(model_channels, class_channels),
-                nn.SiLU(),
-                nn.Linear(class_channels, class_channels)
-            )
+            nn.LayerNorm(model_channels),
+            nn.Linear(model_channels, class_channels),
+            nn.SiLU(),
+            nn.Linear(class_channels, class_channels),
+        )
 
     def forward(self, classes, cond_drop_prob):
 
@@ -95,29 +101,27 @@ class LabelEmbedder(nn.Module):
             classes = self.class_embed_norm(classes)
 
         classes_emb = self.label_emb(classes)
-        
-        if cond_drop_prob > 0:
 
-            label_keep_mask = prob_mask_like((classes.shape[0],), 1 - cond_drop_prob, device=classes.device)
+        if cond_drop_prob > 0:
+            label_keep_mask = prob_mask_like(
+                (classes.shape[0],), 1 - cond_drop_prob, device=classes.device
+            )
 
             classes_emb = torch.where(
-                rearrange(label_keep_mask, 'b -> b 1'),
-                classes_emb,
-                self.null_classes_emb
+                rearrange(label_keep_mask, "b -> b 1"), classes_emb, self.null_classes_emb
             )
 
         classes_emb = self.class_to_cond(classes_emb)
 
         return classes_emb
 
+
 class TextEmbedder(nn.Module):
     """
     Embeds text into vector representations. Also handles label dropout for classifier-free guidance.
     """
-    def __init__(self, 
-                 text_cond_dim, 
-                 text_embed_dim, 
-                 max_text_len):
+
+    def __init__(self, text_cond_dim, text_embed_dim, max_text_len):
         super().__init__()
 
         self.text_to_cond = nn.Linear(text_embed_dim, text_cond_dim)
@@ -134,8 +138,8 @@ class TextEmbedder(nn.Module):
         batch_size, device = text_embeds.shape[0], text_embeds.device
 
         text_vectors = self.text_to_cond(text_embeds)
-            
-        text_vectors = text_vectors[:, :self.max_text_len]
+
+        text_vectors = text_vectors[:, : self.max_text_len]
         text_vectors_len = text_vectors.shape[1]
 
         remainder = self.max_text_len - text_vectors_len
@@ -144,32 +148,30 @@ class TextEmbedder(nn.Module):
             text_vectors = F.pad(text_vectors, (0, 0, 0, remainder))
 
         if exists(text_mask):
-            text_mask = text_mask[:, :self.max_text_len]
+            text_mask = text_mask[:, : self.max_text_len]
 
             if remainder > 0:
-                text_mask = F.pad(text_mask, (0, remainder), value = False)
+                text_mask = F.pad(text_mask, (0, remainder), value=False)
 
-            text_mask = rearrange(text_mask, 'b n -> b n 1')
-        
+            text_mask = rearrange(text_mask, "b n -> b n 1")
+
         if cond_drop_prob > 0:
             text_keep_mask = prob_mask_like((batch_size,), 1 - cond_drop_prob, device=device)
-            text_keep_mask_embed = rearrange(text_keep_mask, 'b -> b 1 1')
+            text_keep_mask_embed = rearrange(text_keep_mask, "b -> b 1 1")
 
-            null_text_mask = torch.ones(batch_size, self.max_text_len).to(text_vectors.dtype).to(device)
+            null_text_mask = (
+                torch.ones(batch_size, self.max_text_len).to(text_vectors.dtype).to(device)
+            )
 
             if exists(text_mask):
                 text_keep_mask_embed = text_mask & text_keep_mask_embed
                 text_mask = text_mask.squeeze(-1)
                 text_mask = torch.where(
-                    rearrange(text_keep_mask, 'b -> b 1'),
-                    text_mask,
-                    null_text_mask)
+                    rearrange(text_keep_mask, "b -> b 1"), text_mask, null_text_mask
+                )
 
             null_text_embed = self.null_text_embed.to(text_vectors.dtype)
-            text_vectors = torch.where(
-                text_keep_mask_embed,
-                text_vectors,
-                null_text_embed)
+            text_vectors = torch.where(text_keep_mask_embed, text_vectors, null_text_embed)
         else:
             text_mask = text_mask.squeeze(-1) if exists(text_mask) else None
 

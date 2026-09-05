@@ -515,9 +515,7 @@ if __name__ == "__main__":
         mbs = bands(nfft=2048, fs=44100).get_band_specs()
 
         for i, (f_min, f_max) in enumerate(mbs):
-            band_defs.append(
-                {"band": band_name, "band_index": i, "f_min": f_min, "f_max": f_max}
-            )
+            band_defs.append({"band": band_name, "band_index": i, "f_min": f_min, "f_max": f_max})
 
     df = pd.DataFrame(band_defs)
     df.to_csv("vox7bands.csv", index=False)

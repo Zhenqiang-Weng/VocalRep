@@ -1,5 +1,5 @@
 # coding: utf-8
-__author__ = 'Roman Solovyev (ZFTurbo): https://github.com/ZFTurbo/'
+__author__ = "Roman Solovyev (ZFTurbo): https://github.com/ZFTurbo/"
 
 import time
 import librosa
@@ -47,8 +47,8 @@ def run_folder(model, args, config, device, verbose: bool = False):
     start_time = time.time()
     model.eval()
 
-    mixture_paths = sorted(glob.glob(os.path.join(args.input_folder, '*.*')))
-    sample_rate = getattr(config.audio, 'sample_rate', 44100)
+    mixture_paths = sorted(glob.glob(os.path.join(args.input_folder, "*.*")))
+    sample_rate = getattr(config.audio, "sample_rate", 44100)
 
     print(f"Total files found: {len(mixture_paths)}. Using sample rate: {sample_rate}")
 
@@ -68,46 +68,52 @@ def run_folder(model, args, config, device, verbose: bool = False):
         try:
             mix, sr = librosa.load(path, sr=sample_rate, mono=False)
         except Exception as e:
-            print(f'Cannot read track: {format(path)}')
-            print(f'Error message: {str(e)}')
+            print(f"Cannot read track: {format(path)}")
+            print(f"Error message: {str(e)}")
             continue
 
         # If mono audio we must adjust it depending on model
         if len(mix.shape) == 1:
             mix = np.expand_dims(mix, axis=0)
-            if 'num_channels' in config.audio:
-                if config.audio['num_channels'] == 2:
-                    print(f'Convert mono track to stereo...')
+            if "num_channels" in config.audio:
+                if config.audio["num_channels"] == 2:
+                    print(f"Convert mono track to stereo...")
                     mix = np.concatenate([mix, mix], axis=0)
 
         mix_orig = mix.copy()
-        if 'normalize' in config.inference:
-            if config.inference['normalize'] is True:
+        if "normalize" in config.inference:
+            if config.inference["normalize"] is True:
                 mix, norm_params = normalize_audio(mix)
 
-        waveforms_orig = demix(config, model, mix, device, model_type=args.model_type, pbar=detailed_pbar)
+        waveforms_orig = demix(
+            config, model, mix, device, model_type=args.model_type, pbar=detailed_pbar
+        )
 
         if args.use_tta:
             waveforms_orig = apply_tta(config, model, mix, waveforms_orig, device, args.model_type)
 
         if args.extract_instrumental:
-            instr = 'vocals' if 'vocals' in instruments else instruments[0]
-            waveforms_orig['instrumental'] = mix_orig - waveforms_orig[instr]
-            
+            instr = "vocals" if "vocals" in instruments else instruments[0]
+            waveforms_orig["instrumental"] = mix_orig - waveforms_orig[instr]
+
             if len(instruments) > 3:
                 other_instruments = [i for i in instruments if i != "vocals"]
                 for instr in other_instruments:
-                    waveforms_orig['instrumental'] = sum([waveforms_orig[i] for i in other_instruments])
-            
-            if 'instrumental' not in instruments:
-                instruments.append('instrumental')
-                
+                    waveforms_orig["instrumental"] = sum(
+                        [waveforms_orig[i] for i in other_instruments]
+                    )
+
+            if "instrumental" not in instruments:
+                instruments.append("instrumental")
+
         if args.extract_other:
             for instr in config.training.instruments:
                 if instr != "other":
-                    waveforms_orig['other'] = waveforms_orig.get('other', mix_orig) - waveforms_orig[instr]
-            if 'other' not in instruments:
-                instruments.append('other')
+                    waveforms_orig["other"] = (
+                        waveforms_orig.get("other", mix_orig) - waveforms_orig[instr]
+                    )
+            if "other" not in instruments:
+                instruments.append("other")
 
         file_name = os.path.splitext(os.path.basename(path))[0]
 
@@ -116,12 +122,12 @@ def run_folder(model, args, config, device, verbose: bool = False):
 
         for instr in instruments:
             estimates = waveforms_orig[instr]
-            if 'normalize' in config.inference:
-                if config.inference['normalize'] is True:
+            if "normalize" in config.inference:
+                if config.inference["normalize"] is True:
                     estimates = denormalize_audio(estimates, norm_params)
 
-            codec = 'flac' if getattr(args, 'flac_file', False) else 'wav'
-            subtype = 'PCM_16' if args.flac_file and args.pcm_type == 'PCM_16' else 'FLOAT'
+            codec = "flac" if getattr(args, "flac_file", False) else "wav"
+            subtype = "PCM_16" if args.flac_file and args.pcm_type == "PCM_16" else "FLOAT"
 
             output_path = os.path.join(output_dir, f"{instr}.{codec}")
             sf.write(output_path, estimates.T, sr, subtype=subtype)
@@ -138,8 +144,12 @@ def proc_folder(dict_args):
     if args.force_cpu:
         device = "cpu"
     elif torch.cuda.is_available():
-        print('CUDA is available, use --force_cpu to disable it.')
-        device = f'cuda:{args.device_ids[0]}' if isinstance(args.device_ids, list) else f'cuda:{args.device_ids}'
+        print("CUDA is available, use --force_cpu to disable it.")
+        device = (
+            f"cuda:{args.device_ids[0]}"
+            if isinstance(args.device_ids, list)
+            else f"cuda:{args.device_ids}"
+        )
     elif torch.backends.mps.is_available():
         device = "mps"
 
@@ -151,8 +161,8 @@ def proc_folder(dict_args):
     model, config = get_model_from_config(args.model_type, args.config_path)
 
     if args.start_check_point:
-        checkpoint = torch.load(args.start_check_point, weights_only=False, map_location='cpu')
-        load_start_checkpoint(args, model, checkpoint, type_='inference')
+        checkpoint = torch.load(args.start_check_point, weights_only=False, map_location="cpu")
+        load_start_checkpoint(args, model, checkpoint, type_="inference")
 
     print("Instruments: {}".format(config.training.instruments))
 

@@ -9,7 +9,8 @@ def add_random_noise(specs, std_dev):
     :param std_dev:
     :return:
     """
-    if not std_dev: return specs
+    if not std_dev:
+        return specs
     return specs + std_dev * torch.randn(specs.shape).to(specs.device)
 
 
@@ -23,8 +24,10 @@ def degrade_some(model, specs, other_inputs, ratio, repeat=1):
     :param repeat: How many times to degrade
     :return:
     """
-    if not ratio: return specs
-    if not repeat: return specs
+    if not ratio:
+        return specs
+    if not repeat:
+        return specs
 
     idx = sample(range(len(specs)), int(ratio * len(specs)))
 
@@ -49,7 +52,8 @@ def replace_frames_with_random(specs, ratio, distrib=torch.rand):
     :param distrib: default torch.rand -> [0, 1 uniform]
     :return:
     """
-    if not ratio: return specs
+    if not ratio:
+        return specs
 
     t = specs.shape[1]
     num_frames = int(t * ratio)
@@ -82,18 +86,22 @@ def random_patches(specs1, specs2, width, slen):
     """
 
     idx = [randrange(l - width) for l in slen]
-    patches1, patches2 = [s[i:i+width] for s, i in zip(specs1, idx)], [s[i:i+width] for s, i in zip(specs2, idx)]
+    patches1, patches2 = (
+        [s[i : i + width] for s, i in zip(specs1, idx)],
+        [s[i : i + width] for s, i in zip(specs2, idx)],
+    )
     return torch.stack(patches1), torch.stack(patches2)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     import numpy as np
+
     specs = torch.randn(2, 128, 80)
     diffs = add_random_noise(specs, 1e-2) - specs
     print(diffs[0].min(), diffs[0].max())
 
     specs = torch.ones(2, 12, 8)
-    specs = replace_frames_with_random(specs,0.3)
+    specs = replace_frames_with_random(specs, 0.3)
     print(specs)
 
     specs = torch.ones(2, 12, 8)
@@ -101,10 +109,9 @@ if __name__ == '__main__':
     print(specs)
 
     specs1 = torch.randn(2, 128, 80)
-    specs1[1,111:,:] = 0.0
+    specs1[1, 111:, :] = 0.0
     specs2 = torch.randn(2, 128, 80)
-    specs2[1,111:,:] =0.0
-    slen = torch.as_tensor([128,111])
-    patches1, patches2 = random_patches(specs1,specs2, 12, slen)
+    specs2[1, 111:, :] = 0.0
+    slen = torch.as_tensor([128, 111])
+    patches1, patches2 = random_patches(specs1, specs2, 12, slen)
     print(patches1.size())
-

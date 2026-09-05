@@ -1,57 +1,48 @@
-"""
-模型注册表与装饰器
+"""Lazy model registration with explicit configuration propagation."""
 
-集中管理 diffusion 模型的注册与查询。
-"""
-import os
 import importlib
+import inspect
+
+from .config import DiffusionConfig
+
 
 DIFFUSION_MODEL_REGISTRY = {}
+_BUILTINS = {
+    "dit": "diffusion.models.dit.dit",
+    "transformer": "diffusion.models.transformer.transformer_diffusion",
+    "simple_mlp": "diffusion.models.simple_mlp.simple_mlp",
+    "template": "diffusion.models.template.template_diffuser",
+}
 
 
-def register_diffusion_model(name):
-    """
-    装饰器：注册 diffusion 模型类
+def register_diffusion_model(name: str):
+    """Register a model class and reject accidental duplicate names."""
 
-    使用方法:
-        @register_diffusion_model('transformer')
-        class TransformerDiffusionModel(nn.Module):
-            ...
-    """
     def decorator(cls):
-        DIFFUSION_MODEL_REGISTRY[name.lower()] = cls
+        key = name.lower()
+        if key in DIFFUSION_MODEL_REGISTRY and DIFFUSION_MODEL_REGISTRY[key] is not cls:
+            raise ValueError(f"Diffusion model is already registered: {name}")
+        DIFFUSION_MODEL_REGISTRY[key] = cls
         return cls
+
     return decorator
 
 
-def get_diffusion_model(name):
-    """
-    根据名称实例化 diffusion 模型
-    """
+def get_diffusion_model(name: str, config: DiffusionConfig | None = None):
+    """Instantiate a selected model with its configuration and model keyword arguments."""
     name = name.lower()
+    if name not in DIFFUSION_MODEL_REGISTRY and name in _BUILTINS:
+        importlib.import_module(_BUILTINS[name])
     if name not in DIFFUSION_MODEL_REGISTRY:
-        available = ', '.join(DIFFUSION_MODEL_REGISTRY.keys())
-        raise ValueError(
-            f"未知的模型类型: {name}\n可用的模型: {available}"
-        )
-    model_class = DIFFUSION_MODEL_REGISTRY[name]
-    return model_class()
+        raise ValueError(f"Unknown diffusion model: {name}. Available: {list_diffusion_models()}")
+    config = config or DiffusionConfig(model_type=name)
+    cls = DIFFUSION_MODEL_REGISTRY[name]
+    kwargs = dict(config.model_kwargs)
+    if "config" in inspect.signature(cls).parameters:
+        return cls(config=config, **kwargs)
+    return cls(**kwargs)
 
 
-def list_diffusion_models():
-    return list(DIFFUSION_MODEL_REGISTRY.keys())
-
-
-# 自动导入并注册所有模型
-_current_dir = os.path.dirname(__file__)
-for _filename in os.listdir(_current_dir):
-    _filepath = os.path.join(_current_dir, _filename)
-    
-    # 导入模块文件夹
-    if os.path.isdir(_filepath) and not _filename.startswith('_'):
-        _init_file = os.path.join(_filepath, '__init__.py')
-        if os.path.exists(_init_file):
-            importlib.import_module(f'diffusion.models.{_filename}')
-
-
-
+def list_diffusion_models() -> list[str]:
+    """List built-in and explicitly registered models without importing them."""
+    return sorted(set(_BUILTINS) | set(DIFFUSION_MODEL_REGISTRY))

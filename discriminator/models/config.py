@@ -46,6 +46,15 @@ class DiscriminatorConfig:
     model_kwargs: Optional[Dict[str, Any]] = None
 
     def __post_init__(self) -> None:
+        self.input_type = self.input_type.lower()
+        if self.input_type not in {"mel", "wave", "music"}:
+            raise ValueError(f"Unknown discriminator input type: {self.input_type}")
+        if self.loss_type not in {"rank", "hinge"}:
+            raise ValueError(f"Unknown discriminator loss type: {self.loss_type}")
+        if self.grad_acc_step < 1 or self.n_warmup < 1 or self.lr <= 0:
+            raise ValueError(
+                "Accumulation steps, warmup steps, and learning rate must be positive."
+            )
         if self.betas is None:
             self.betas = [0.9, 0.98]
 
@@ -53,12 +62,11 @@ class DiscriminatorConfig:
             self.model_kwargs = {}
 
         if self.gan_loss_lambda is not None:
-            try:
-                val = float(self.gan_loss_lambda)
-            except Exception:
-                val = 0.1
+            val = float(self.gan_loss_lambda)
             self.gan_weight = val
             self.fml_weight = val
+        if self.gan_weight < 0 or self.fml_weight < 0 or self.n_train_start < 0:
+            raise ValueError("Loss weights and training start step must be non-negative.")
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "DiscriminatorConfig":

@@ -1,5 +1,5 @@
 audio:
-  chunk_size: 529200 # 8 sec chunks
+  chunk_size: 529200 # 12-second chunks at 44.1 kHz
   dim_f: 1024
   dim_t: 801 # don't work (use in model)
   hop_length: 441 # don't work (use in model)

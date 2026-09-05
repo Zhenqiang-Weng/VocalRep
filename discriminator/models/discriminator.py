@@ -14,12 +14,14 @@ import torch.nn as nn
 #     def forward(self,x):
 #         return super().forward(x.transpose(2,1)).transpose(2,1)
 
+
 class Conv1d(nn.Conv1d):
     """A wrapper around nn.Conv1d, that works on (batch, time, channels)"""
 
     def forward(self, x):
         # (B, T, C) -> (B, C, T) -> Conv1d -> (B, T, C)
         return super().forward(x.transpose(1, 2)).transpose(1, 2)
+
 
 class SingleWindowDisc(nn.Module):
     def __init__(self, time_length, freq_length=80, kernel=3, channel=128):
@@ -32,21 +34,39 @@ class SingleWindowDisc(nn.Module):
         use_weight_norm = True
         conv_layers = [
             nn.Sequential(
-                Conv1d(freq_length, channel, kernel_size=kernel_size,
-                       padding=padding, dilation=dilation, bias=True),
+                Conv1d(
+                    freq_length,
+                    channel,
+                    kernel_size=kernel_size,
+                    padding=padding,
+                    dilation=dilation,
+                    bias=True,
+                ),
                 nn.LeakyReLU(0.2, inplace=True),
             )
         ]
         for i in range(n_layers - 2):
             conv_layers += [
-                Conv1d(channel, channel, kernel_size=kernel_size,
-                       padding=padding, dilation=dilation, bias=True),
+                Conv1d(
+                    channel,
+                    channel,
+                    kernel_size=kernel_size,
+                    padding=padding,
+                    dilation=dilation,
+                    bias=True,
+                ),
                 nn.LeakyReLU(0.2, inplace=True),
             ]
         conv_layers += [
             nn.Sequential(
-                Conv1d(channel, 1, kernel_size=kernel_size,
-                       padding=(kernel - 1) // 2, dilation=1, bias=True),
+                Conv1d(
+                    channel,
+                    1,
+                    kernel_size=kernel_size,
+                    padding=(kernel - 1) // 2,
+                    dilation=1,
+                    bias=True,
+                ),
             )
         ]
         self.conv_layers = nn.ModuleList(conv_layers)
@@ -54,6 +74,7 @@ class SingleWindowDisc(nn.Module):
         # apply weight norm
         if use_weight_norm:
             self.apply_weight_norm()
+
     def apply_weight_norm(self):
         """Apply weight normalization module from all of the layers."""
 
@@ -71,8 +92,8 @@ class SingleWindowDisc(nn.Module):
                 torch.nn.utils.remove_weight_norm(m)
             except ValueError:
                 return
-        self.apply(_remove_weight_norm)
 
+        self.apply(_remove_weight_norm)
 
     def forward(self, x):
         """
@@ -83,7 +104,7 @@ class SingleWindowDisc(nn.Module):
         for l in self.conv_layers:
             x = l(x)
             h.append(x)
-        h.pop() # pop final result
+        h.pop()  # pop final result
         validity = x.view(x.shape[0], -1)
         return validity, h
 
@@ -92,28 +113,28 @@ class MultiWindowDiscriminator(nn.Module):
     def __init__(self, time_lengths, freq_length=80, kernel=3, channel=128):
         super(MultiWindowDiscriminator, self).__init__()
         self.win_lengths = time_lengths
-        self.discriminators = nn.ModuleList([
-            SingleWindowDisc(t, freq_length, kernel, channel=channel)
-            for t in time_lengths
-        ])
-
+        self.discriminators = nn.ModuleList(
+            [SingleWindowDisc(t, freq_length, kernel, channel=channel) for t in time_lengths]
+        )
 
     def forward(self, x, x_len, start_frames_wins=None):
-        '''
+        """
         Args:
             x (tensor): input mel, (B, c_in, T, n_bins).
             x_length (tensor): len of per mel. (B,).
 
         Returns:
             tensor : (B).
-        '''
+        """
         validity = []
         if start_frames_wins is None:
             start_frames_wins = [None] * len(self.discriminators)
         assert len(start_frames_wins) == len(self.discriminators), ""
         h = []
         for i, start_frames in enumerate(start_frames_wins):
-            x_clip, start_frames = self.clip(x, x_len, self.win_lengths[i], start_frames)  # (B, win_length, C)
+            x_clip, start_frames = self.clip(
+                x, x_len, self.win_lengths[i], start_frames
+            )  # (B, win_length, C)
             start_frames_wins[i] = start_frames
             if x_clip is None:
                 continue
@@ -122,11 +143,11 @@ class MultiWindowDiscriminator(nn.Module):
             validity.append(x_clip)
         if len(validity) != len(self.discriminators):
             return None, start_frames_wins, h
-        validity = sum(validity)  # [B]
+        validity = torch.cat(validity, dim=1)
         return validity, start_frames_wins, h
 
     def clip(self, x, x_len, win_length, start_frames=None):
-        '''Ramdom clip x to win_length.
+        """Ramdom clip x to win_length.
         Args:
             x (tensor) : (B, c_in, T, n_bins).
             cond (tensor) : (B, T, H).
@@ -136,33 +157,42 @@ class MultiWindowDiscriminator(nn.Module):
         Returns:
             (tensor) : (B, c_in, win_length, n_bins).
 
-        '''
+        """
+        if x_len.shape != (x.shape[0],) or (x_len > x.shape[1]).any():
+            raise ValueError("Mel lengths must match the batch and fit within the input.")
         start_frame_max = (x_len.max() - win_length).item()
-        if start_frame_max < 0:
+        if (x_len < win_length).any():
             return None, start_frames
 
         if start_frames is None:
             T_starts = [0] * x.shape[0]
-            T_ends = [l.item()-win_length for l in x_len]
-            T_ends = np.clip(T_ends, 0, start_frame_max+1).tolist()
+            T_ends = [l.item() - win_length for l in x_len]
+            T_ends = np.clip(T_ends, 0, start_frame_max + 1).tolist()
             start_frames = [
-                np.random.randint(low=T_starts[i], high=T_ends[i]+1)
-                for i in range(x.shape[0])
+                np.random.randint(low=T_starts[i], high=T_ends[i] + 1) for i in range(x.shape[0])
             ]
         else:
-            start_frames = np.clip(start_frames, 0, start_frame_max).tolist()
-        x_batch = torch.cat([x[[i], s:s+win_length] for i,s in enumerate(start_frames)])
+            start_frames = [
+                min(max(int(start), 0), int(length) - win_length)
+                for start, length in zip(start_frames, x_len)
+            ]
+        x_batch = torch.cat([x[[i], s : s + win_length] for i, s in enumerate(start_frames)])
         return x_batch, start_frames
+
 
 class MultibandFrequencyDiscriminator(nn.Module):
     def __init__(self, time_lengths, freq_lengths, kernel=3, n_bins=80, channel=128):
         super(MultibandFrequencyDiscriminator, self).__init__()
         self.n_mel_channels = n_bins
         self.win_lengths = freq_lengths
-        self.discriminators = nn.ModuleList([
-            MultiWindowDiscriminator(time_lengths, f, kernel, channel=channel)
-            for f in freq_lengths
-        ])
+        if not freq_lengths or any(length <= 0 or length > n_bins for length in freq_lengths):
+            raise ValueError("Frequency windows must fit within the mel channel count.")
+        self.discriminators = nn.ModuleList(
+            [
+                MultiWindowDiscriminator(time_lengths, f, kernel, channel=channel)
+                for f in freq_lengths
+            ]
+        )
 
     def forward(self, x, x_len, start_frames_wins=None):
         if start_frames_wins is None:
@@ -170,25 +200,27 @@ class MultibandFrequencyDiscriminator(nn.Module):
         assert len(start_frames_wins) == len(self.discriminators), ""
 
         start_bands_wins = [
-            0, # low frequency band
-            (self.n_mel_channels - self.win_lengths[1]) // 2, # middle frequency band
-            self.n_mel_channels - self.win_lengths[2] # high frequency band
+            int(index * (self.n_mel_channels - width) / max(1, len(self.win_lengths) - 1))
+            for index, width in enumerate(self.win_lengths)
         ]
         validity = []
         start_frames = []
         h = []
         for i, start_bands in enumerate(start_bands_wins):
             freqband = x[..., start_bands : start_bands + self.win_lengths[i]]
-            validity_, start_frames_wins_, h_ = self.discriminators[i](freqband, x_len, start_frames_wins[i])
+            validity_, start_frames_wins_, h_ = self.discriminators[i](
+                freqband, x_len, start_frames_wins[i]
+            )
             h.append(h_)
             start_frames.append(start_frames_wins_)
             validity.append(validity_)
 
         if len(validity) != len(self.discriminators):
-            return  None, start_frames_wins, h
-        validity = sum(validity) # [B, 1]
+            return None, start_frames_wins, h
+        if any(value is None for value in validity):
+            raise ValueError("Mel inputs are shorter than the configured discriminator windows.")
+        validity = torch.cat(validity, dim=1)
         return validity, start_frames, h
-
 
 
 class Discriminator(nn.Module):
@@ -204,9 +236,9 @@ class Discriminator(nn.Module):
             freq_lengths=freq_lengths,
             time_lengths=time_lengths,
             kernel=kernel,
-            channel=channel
+            channel=channel,
+            n_bins=hparams.n_mel_channels,
         )
-
 
     def forward(self, x, x_len=None, start_frames_wins=None):
         """
@@ -216,18 +248,20 @@ class Discriminator(nn.Module):
         :return:
         """
         if x_len is None:
-            x_len = x.sum([-1]).ne(0).int().sum([-1]) # [B,]
-        y, start_frames_wins, h = self.discriminator(
-            x, x_len, start_frames_wins=start_frames_wins
-        )
+            x_len = x.sum([-1]).ne(0).int().sum([-1])  # [B,]
+        y, start_frames_wins, h = self.discriminator(x, x_len, start_frames_wins=start_frames_wins)
         y = y.squeeze(-1)
         return y, start_frames_wins, h
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     inputs = torch.randn(2, 600, 80)
-    import sys; sys.path.insert(0, '..')
+    import sys
+
+    sys.path.insert(0, "..")
     from utils.hparams import HParams
-    hparams = HParams('../config/default.yaml')
+
+    hparams = HParams("../config/default.yaml")
     net = Discriminator(hparams.discriminator)
     print(net)
     y, start_frames_wins, h = net(inputs, None)

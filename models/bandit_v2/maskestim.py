@@ -82,9 +82,7 @@ class NormMLP(BaseNormMLP):
         # print(mb.shape)
         batch, n_time, _ = mb.shape
         if self.complex_mask:
-            mb = mb.reshape(
-                batch, n_time, self.in_channels, self.bandwidth, self.reim
-            ).contiguous()
+            mb = mb.reshape(batch, n_time, self.in_channels, self.bandwidth, self.reim).contiguous()
             # print(mb.shape)
             mb = torch.view_as_complex(mb)  # (batch, n_time, in_channels, bandwidth)
         else:
@@ -271,9 +269,7 @@ class MaskEstimationModule(OverlappingMaskEstimationModule):
     def forward(self, q, cond=None):
         # q = (batch, n_bands, n_time, emb_dim)
 
-        masks = self.compute_masks(
-            q
-        )  # [n_bands  * (batch, in_channels, bandwidth, n_time)]
+        masks = self.compute_masks(q)  # [n_bands  * (batch, in_channels, bandwidth, n_time)]
 
         # TODO: currently this requires band specs to have no gap and no overlap
         masks = torch.concat(masks, dim=2)  # (batch, in_channels, n_freq, n_time)

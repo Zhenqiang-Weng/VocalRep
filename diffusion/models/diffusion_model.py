@@ -1,13 +1,13 @@
 """
-Diffusion模型注册表与默认模型实现
-模型类由 `diffusion.models.registry` 管理，具体模型实现放在各自文件中。
+Diffusion model registry and default implementation
+Model classes are managed by `diffusion.models.registry`, with implementations in separate files.
 """
 
 from .registry import register_diffusion_model, get_diffusion_model, list_diffusion_models
 
 
-# 便利函数：创建默认模型
+# Convenience function to create the default model
 def create_default_model(config):
-    """创建默认的diffusion模型"""
-    model_type = getattr(config, 'model_type', 'transformer')
+    """Create the default diffusion model"""
+    model_type = getattr(config, "model_type", "transformer")
     return get_diffusion_model(model_type, config)

@@ -7,8 +7,10 @@ from .layer_utils import LayerNorm
 from .operator_utils import l2norm, reshape_for_broadcast
 from .utils import exists
 
-def compute_freqs_cis(dim: int, end: int, theta: float = 10000.0, 
-                      device: torch.device = torch.device("cpu")) -> torch.Tensor:
+
+def compute_freqs_cis(
+    dim: int, end: int, theta: float = 10000.0, device: torch.device = torch.device("cpu")
+) -> torch.Tensor:
     """
     Precompute the frequency tensor for complex exponentials (cis) with given dimensions.
 
@@ -30,6 +32,7 @@ def compute_freqs_cis(dim: int, end: int, theta: float = 10000.0,
     freqs = torch.outer(t, freqs).float()  # type: ignore
     freqs_cis = torch.polar(torch.ones_like(freqs).to(device), freqs)  # complex64
     return freqs_cis
+
 
 def apply_rotary_emb(
     xq: torch.Tensor,
@@ -53,7 +56,7 @@ def apply_rotary_emb(
     Returns:
         Tuple[torch.Tensor, torch.Tensor]: Tuple of modified query tensor and key tensor with rotary embeddings.
 
-        
+
 
     """
     xq_ = torch.view_as_complex(xq.float().reshape(*xq.shape[:-1], -1, 2))
@@ -63,26 +66,27 @@ def apply_rotary_emb(
         x_shape = list(xq_.shape)
         x_shape[1] = xq_.shape[1] + xk_.shape[1]
         freqs_cis = reshape_for_broadcast(freqs_cis, x_shape)
-        xq_out = torch.view_as_real(xq_ * freqs_cis[:, :xq_.shape[1]]).flatten(3)
-        xk_out = torch.view_as_real(xk_ * freqs_cis[:, xq_.shape[1]:]).flatten(3)
+        xq_out = torch.view_as_real(xq_ * freqs_cis[:, : xq_.shape[1]]).flatten(3)
+        xk_out = torch.view_as_real(xk_ * freqs_cis[:, xq_.shape[1] :]).flatten(3)
     else:
         freqs_cis = reshape_for_broadcast(freqs_cis, list(xk_.shape))
-        xq_out = torch.view_as_real(xq_ * freqs_cis[:, :xq_.shape[1]]).flatten(3)
+        xq_out = torch.view_as_real(xq_ * freqs_cis[:, : xq_.shape[1]]).flatten(3)
         xk_out = torch.view_as_real(xk_ * freqs_cis).flatten(3)
-    
+
     return xq_out.type_as(xq), xk_out.type_as(xk)
+
 
 # attention
 class Attention(nn.Module):
     def __init__(
         self,
         dim,
-        heads = 8,
-        context_dim = None,
-        use_self_text_cond = True,
-        use_qk_l2norm = False,
-        use_rope = True,
-        out_drop: float = 0.,
+        heads=8,
+        context_dim=None,
+        use_self_text_cond=True,
+        use_qk_l2norm=False,
+        use_rope=True,
+        out_drop: float = 0.0,
     ):
         super().__init__()
 
@@ -92,37 +96,36 @@ class Attention(nn.Module):
 
         self.to_q = nn.Linear(dim, dim, bias=False)
         self.to_kv = nn.Linear(dim, dim * 2, bias=False)
-        self.to_context = nn.Linear(context_dim, dim * 2, bias=False) if exists(context_dim) else None
+        self.to_context = (
+            nn.Linear(context_dim, dim * 2, bias=False) if exists(context_dim) else None
+        )
         self.use_self_text_cond = use_self_text_cond
-        self.use_rope = use_rope # use rotary position encoding
+        self.use_rope = use_rope  # use rotary position encoding
         self.freqs_cis_dict = {}
 
         self.use_qk_l2norm = use_qk_l2norm
         if self.use_qk_l2norm:
             self.q_scale = nn.Parameter(torch.ones(self.head_dim))
             self.k_scale = nn.Parameter(torch.ones(self.head_dim))
-            self.scale = self.head_dim ** 0.5
+            self.scale = self.head_dim**0.5
         else:
-            self.scale = self.head_dim ** -0.5
+            self.scale = self.head_dim**-0.5
 
         self.to_out = nn.Linear(dim, dim, bias=False)
         self.to_out_drop = nn.Dropout(out_drop)
 
-    def forward(self, x, 
-                context=None, 
-                context_mask=None):
+    def forward(self, x, context=None, context_mask=None):
 
         q = self.to_q(x)
 
         # add text conditioning, if present
         if self.use_self_text_cond and exists(context):
-
             assert exists(self.to_context)
-            k, v = self.to_kv(x).chunk(2, dim = -1)
+            k, v = self.to_kv(x).chunk(2, dim=-1)
 
-            ck, cv = self.to_context(context).chunk(2, dim = -1)
-            k = torch.cat((k, ck), dim = -2)
-            v = torch.cat((v, cv), dim = -2)
+            ck, cv = self.to_context(context).chunk(2, dim=-1)
+            k = torch.cat((k, ck), dim=-2)
+            v = torch.cat((v, cv), dim=-2)
 
             if self.use_rope:
                 # rope after concat
@@ -130,12 +133,14 @@ class Attention(nn.Module):
                 b, n, _ = q.shape
                 q = q.reshape(b, n, self.heads, self.head_dim)
                 k = k.reshape(b, k.shape[1], self.heads, self.head_dim)
-                
+
                 cat_seq_len = k.shape[1]
                 if str(cat_seq_len) not in self.freqs_cis_dict:
-                    self.freqs_cis_dict[str(cat_seq_len)] = compute_freqs_cis(self.head_dim, k.shape[1], device=k.device)
+                    self.freqs_cis_dict[str(cat_seq_len)] = compute_freqs_cis(
+                        self.head_dim, k.shape[1], device=k.device
+                    )
                 q, k = apply_rotary_emb(q, k, freqs_cis=self.freqs_cis_dict[str(cat_seq_len)])
-                
+
                 # Replace rearrange_many back: "b n h d -> b n (h d)"
                 q = q.reshape(b, q.shape[1], -1)
                 k = k.reshape(b, k.shape[1], -1)
@@ -146,8 +151,7 @@ class Attention(nn.Module):
 
         else:
             if exists(context):
-
-                k, v = self.to_context(context).chunk(2, dim = -1)
+                k, v = self.to_context(context).chunk(2, dim=-1)
 
                 if self.use_rope:
                     # rope on cross attention
@@ -155,19 +159,23 @@ class Attention(nn.Module):
                     b, n_q, _ = q.shape
                     q = q.reshape(b, n_q, self.heads, self.head_dim)
                     k = k.reshape(b, k.shape[1], self.heads, self.head_dim)
-                    
+
                     cat_seq_len = k.shape[1] + q.shape[1]
                     if str(cat_seq_len) not in self.freqs_cis_dict:
-                        self.freqs_cis_dict[str(cat_seq_len)] = compute_freqs_cis(self.head_dim, k.shape[1] + q.shape[1], device=k.device)
-                    q, k = apply_rotary_emb(q, k, freqs_cis=self.freqs_cis_dict[str(cat_seq_len)], cross_attn=True)
-                    
+                        self.freqs_cis_dict[str(cat_seq_len)] = compute_freqs_cis(
+                            self.head_dim, k.shape[1] + q.shape[1], device=k.device
+                        )
+                    q, k = apply_rotary_emb(
+                        q, k, freqs_cis=self.freqs_cis_dict[str(cat_seq_len)], cross_attn=True
+                    )
+
                     # Replace rearrange_many back: "b n h d -> b n (h d)"
                     q = q.reshape(b, q.shape[1], -1)
                     k = k.reshape(b, k.shape[1], -1)
-                
+
             else:
-                k, v = self.to_kv(x).chunk(2, dim = -1)
-        
+                k, v = self.to_kv(x).chunk(2, dim=-1)
+
         # reshape for multi-head attention
         # Replace rearrange_many: "b n (h d) -> b h n d"
         b, n_q, _ = q.shape
@@ -189,10 +197,10 @@ class Attention(nn.Module):
         if exists(context_mask):
             max_neg_value = torch.finfo(sim.dtype).min
             context_mask = context_mask.unsqueeze(1).unsqueeze(2)  # b j -> b 1 1 j
-            sim = sim.masked_fill(context_mask==0, max_neg_value)
+            sim = sim.masked_fill(context_mask == 0, max_neg_value)
 
         # attention
-        attn = sim.softmax(dim = -1, dtype = torch.float32)
+        attn = sim.softmax(dim=-1, dtype=torch.float32)
         attn = attn.to(sim.dtype)
 
         # aggregate values
@@ -201,79 +209,84 @@ class Attention(nn.Module):
         out = out.transpose(1, 2).reshape(b, n_q, -1).contiguous()
         return self.to_out(out).contiguous()
 
-    
-def FeedForward(dim, mult = 2):
+
+def FeedForward(dim, mult=2):
     hidden_dim = int(dim * mult)
     return nn.Sequential(
         LayerNorm(dim),
-        nn.Linear(dim, hidden_dim, bias = False),
+        nn.Linear(dim, hidden_dim, bias=False),
         nn.GELU(),
         LayerNorm(hidden_dim),
-        nn.Linear(hidden_dim, dim, bias = False)
+        nn.Linear(hidden_dim, dim, bias=False),
     )
 
-ChanLayerNorm = partial(LayerNorm, dim = -3)
 
-def ChanFeedForward(dim, mult = 2):  # in paper, it seems for self attention layers they did feedforwards with twice channel width
+ChanLayerNorm = partial(LayerNorm, dim=-3)
+
+
+def ChanFeedForward(
+    dim, mult=2
+):  # in paper, it seems for self attention layers they did feedforwards with twice channel width
     hidden_dim = int(dim * mult)
     return nn.Sequential(
         ChanLayerNorm(dim),
         nn.Conv2d(dim, hidden_dim, 1, bias=False),
         nn.GELU(),
         ChanLayerNorm(hidden_dim),
-        nn.Conv2d(hidden_dim, dim, 1, bias=False)
+        nn.Conv2d(hidden_dim, dim, 1, bias=False),
     )
+
 
 class LinearAttention(nn.Module):
     def __init__(
         self,
         dim,
-        heads = 8,
-        dropout = 0.05,
-        context_dim = None,
+        heads=8,
+        dropout=0.05,
+        context_dim=None,
     ):
         super().__init__()
-        
+
         self.heads = heads
         assert dim % heads == 0, "Embedding dimension must be 0 modulo number of heads."
         head_dim = dim // heads
         inner_dim = head_dim * heads
         self.norm = ChanLayerNorm(dim)
 
-        self.scale = head_dim ** -0.5
+        self.scale = head_dim**-0.5
 
         self.nonlin = nn.SiLU()
 
         self.to_q = nn.Sequential(
             nn.Dropout(dropout),
             nn.Conv2d(dim, inner_dim, 1, bias=False),
-            nn.Conv2d(inner_dim, inner_dim, 3, bias=False, padding = 1, groups = inner_dim)
+            nn.Conv2d(inner_dim, inner_dim, 3, bias=False, padding=1, groups=inner_dim),
         )
 
         self.to_k = nn.Sequential(
             nn.Dropout(dropout),
-            nn.Conv2d(dim, inner_dim, 1, bias = False),
-            nn.Conv2d(inner_dim, inner_dim, 3, bias=False, 
-                      padding = 1, groups = inner_dim)
+            nn.Conv2d(dim, inner_dim, 1, bias=False),
+            nn.Conv2d(inner_dim, inner_dim, 3, bias=False, padding=1, groups=inner_dim),
         )
 
         self.to_v = nn.Sequential(
             nn.Dropout(dropout),
-            nn.Conv2d(dim, inner_dim, 1, bias = False),
-            nn.Conv2d(inner_dim, inner_dim, 3, bias=False, 
-                      padding = 1, groups = inner_dim)
+            nn.Conv2d(dim, inner_dim, 1, bias=False),
+            nn.Conv2d(inner_dim, inner_dim, 3, bias=False, padding=1, groups=inner_dim),
         )
 
-        self.to_context = nn.Linear(context_dim, inner_dim * 2, bias=False) if exists(context_dim) else None
+        self.to_context = (
+            nn.Linear(context_dim, inner_dim * 2, bias=False) if exists(context_dim) else None
+        )
 
-        self.to_out = nn.Conv2d(inner_dim, dim, 1, bias = False)
+        self.to_out = nn.Conv2d(inner_dim, dim, 1, bias=False)
 
-    def forward(self, fmap, context = None):
+    def forward(self, fmap, context=None):
         h, x, y = self.heads, *fmap.shape[-2:]
 
         fmap = self.norm(fmap)
         q, k, v = map(lambda fn: fn(fmap), (self.to_q, self.to_k, self.to_v))
-        
+
         # Replace rearrange_many: 'b (h c) x y -> (b h) (x y) c'
         b = q.shape[0]
         c = q.shape[1] // h
@@ -283,22 +296,22 @@ class LinearAttention(nn.Module):
 
         if exists(context):
             assert exists(self.to_context)
-            ck, cv = self.to_context(context).chunk(2, dim = -1)
+            ck, cv = self.to_context(context).chunk(2, dim=-1)
             # Replace rearrange_many: 'b n (h d) -> (b h) n d'
             n = ck.shape[1]
             d = ck.shape[2] // h
             ck = ck.reshape(b, n, h, d).permute(0, 2, 1, 3).reshape(b * h, n, d)
             cv = cv.reshape(b, n, h, d).permute(0, 2, 1, 3).reshape(b * h, n, d)
-            k = torch.cat((k, ck), dim = -2)
-            v = torch.cat((v, cv), dim = -2)
+            k = torch.cat((k, ck), dim=-2)
+            v = torch.cat((v, cv), dim=-2)
 
-        q = q.softmax(dim = -1)
-        k = k.softmax(dim = -2)
+        q = q.softmax(dim=-1)
+        k = k.softmax(dim=-2)
 
         q = q * self.scale
 
-        context = einsum('b n d, b n e -> b d e', k, v)
-        out = einsum('b n d, b d e -> b n e', q, context)
+        context = einsum("b n d, b n e -> b d e", k, v)
+        out = einsum("b n d, b d e -> b n e", q, context)
         # Replace rearrange: '(b h) (x y) d -> b (h d) x y'
         out = out.reshape(b, h, x * y, c).permute(0, 1, 3, 2).reshape(b, h * c, x, y)
 

@@ -99,36 +99,64 @@ The repository cleanup did not modify, replace, or regenerate any weight under
 
 ## Speaker-guided inference
 
-`inference_with_spk.py` remains an experimental entry point. It runs in three
-stages: first it performs a zero-conditioned blind separation, then it invokes
-an external script to extract an embedding from the resulting `vocals.wav`,
-and finally it performs a guided separation with that embedding.
+The main entry point performs blind separation, extracts the dominant vocal
+identity with the official pretrained **CAM++ / CAMPPlus (campp)** encoder, and
+runs speaker-guided separation. The encoder uses 16 kHz audio, 80-bin Kaldi
+filterbanks with mean normalization, and 192-dimensional embeddings.
 
-This workflow requires an additional CAMPPlus model and a speaker-embedding
-extraction script. Specify the external Python environment and script with:
+The official
+[iic/speech_campplus_sv_zh_en_16k-common_advanced](https://modelscope.cn/models/iic/speech_campplus_sv_zh_en_16k-common_advanced)
+revision `v1.0.0` is downloaded on first use into `checkpoints/campp/`.
+Both configuration and weights are SHA-256 verified. No external extraction
+script or separate Python environment is required. For offline use, supply
+`--spk_model_path /path/to/campp` with `configuration.json` and
+`campplus_cn_en_common.pt`. The encoder is frozen during extraction.
+
+Run from the repository root:
 
 ```bash
-export MSS_SPEAKER_PYTHON=/path/to/speaker-env/bin/python
-export MSS_SPEAKER_SCRIPT=/path/to/batch_extract_embeddings.py
+python inference_with_spk.py \
+  --model_type spk_bs_roformer \
+  --config_path ckpts/multi_stem/config.yaml \
+  --start_check_point ckpts/multi_stem/model_spk_bs_roformer_ep_5_sisdr_9.8275.ckpt \
+  --input_folder /path/to/mixtures \
+  --store_dir results/separation \
+  --inference_batch_size 1
 ```
 
-For each input file, the external script must create:
+Alternatively, set `INPUT_FOLDER` and run `bash infer_with_spk.sh`.
+Set `SPK_MODEL_PATH` for an offline encoder or `FORCE_CPU=true` for CPU inference.
+`--inference_chunk_size` overrides the chunk length in samples; 176400 samples
+is a practical four-second setting at 44.1 kHz.
+
+Outputs are organized as:
 
 ```text
-<store_dir>/embeddings/<input-filename>/embedding.npy
+results/separation/
+  wo_spk/<track>/{vocals,backing_vocal,instrumental}.wav
+  with_spk/<track>/{vocals,backing_vocal,instrumental}.wav
+  embeddings/<track>/embedding.npy
+  run_summary.json
 ```
 
-The singular filename `embedding.npy` used here is different from the plural
-`embeddings.npy` expected inside each training-track directory. Every run
-deletes and recreates `<store_dir>/embeddings`, so use a dedicated
-`--store_dir` and do not keep files that must be preserved in that
-subdirectory.
+The embedding has shape `(1, 192)`; training datasets use the separate filename
+`embeddings.npy`. Each invocation recomputes its selected tracks and overwrites
+their output files, without deleting the embedding directory. Empty input,
+invalid checkpoints, non-finite audio, and missing active vocal segments are
+reported as errors. Silent vocals do not produce a fabricated speaker identity.
 
-The two CAMPPlus paths currently recorded in the repository are legacy
-gitlinks, but no `.gitmodules` file records their repository URLs. A fresh
-clone therefore cannot retrieve that model automatically. Obtain and place the
-asset only after confirming its original source; do not overwrite anything
-under `ckpts/` with an unknown or substitute weight.
+## Reproducible three-stem test
+
+```bash
+python -m scripts.smoke_test_three_stem \
+  --checkpoint ckpts/multi_stem/model_spk_bs_roformer_ep_5_sisdr_9.8275.ckpt
+```
+
+This downloads the project's public Boy Friend demo, verifies asset checksums,
+and runs both separation passes. It validates stereo output lengths, sample
+rates, finite non-silent stems, and the pretrained embedding. Audio, generated
+outputs, and downloaded models are ignored by Git. See
+[the test record](docs/TESTING.md) for measured results and scope.
 
 ## Training
 
@@ -148,12 +176,18 @@ layouts and the validation checklist.
 Before launching a multi-GPU job, first use one GPU and a small dataset to
 verify data loading and one forward/backward pass.
 
+See [auxiliary model training](docs/AUXILIARY_MODELS.md) for discriminator and
+diffusion configuration, loss ownership, checkpoint compatibility, and tests.
+
 ## Development checks
 
 ```bash
-python -m pip install -r requirements-dev.txt
+python -m pip install -r requirements.txt -r requirements-dev.txt
 ruff check .
-python -m compileall -q .
+ruff format --check .
+python scripts/check_english_comments.py
+python -m pytest -q
+python -m compileall -q -x '/(\.venv|checkpoints|test_sample|results)/' .
 bash -n train_accelerate.sh infer_with_spk.sh
 ```
 

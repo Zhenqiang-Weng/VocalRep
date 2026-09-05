@@ -22,17 +22,26 @@ class ResidualGatedBlock(nn.Module):
       - optional conditioning (adds to pre-activations)
       - project to residual + skip via 1x1 conv
     """
+
     def __init__(self, hidden_channels, kernel_size=3, dilation=1, cond_channels=None, dropout=0.0):
         super().__init__()
         pad = (kernel_size - 1) // 2 * dilation
         # conv that produces filter & gate (2 * hidden)
-        self.conv = nn.Conv1d(hidden_channels, 2 * hidden_channels, kernel_size,
-                              padding=pad, dilation=dilation, bias=False)
+        self.conv = nn.Conv1d(
+            hidden_channels,
+            2 * hidden_channels,
+            kernel_size,
+            padding=pad,
+            dilation=dilation,
+            bias=False,
+        )
         # projection from gated activation to (residual + skip)
         self.res_skip = nn.Conv1d(hidden_channels, hidden_channels + hidden_channels, kernel_size=1)
         # conditioning projection: if cond_channels provided, map to 2*hidden per layer
         if cond_channels is not None:
-            self.cond_proj = nn.Conv1d(cond_channels, 2 * hidden_channels, kernel_size=1, bias=False)
+            self.cond_proj = nn.Conv1d(
+                cond_channels, 2 * hidden_channels, kernel_size=1, bias=False
+            )
         else:
             self.cond_proj = None
         self.dropout = nn.Dropout(dropout) if dropout > 0.0 else nn.Identity()
@@ -75,8 +84,17 @@ class WaveNet(nn.Module):
         * cond: [B, n_hidden, T]  (time-aligned conditioning) or None
       - Output shape equals input channels: [B, C_in, T]
     """
-    def __init__(self, in_channels, n_layers=20, n_chans=384, n_hidden=None,
-                 kernel_size=3, skip_channels=None, dropout=0.0):
+
+    def __init__(
+        self,
+        in_channels,
+        n_layers=20,
+        n_chans=384,
+        n_hidden=None,
+        kernel_size=3,
+        skip_channels=None,
+        dropout=0.0,
+    ):
         super().__init__()
         self.in_channels = in_channels
         self.hidden_channels = n_chans
@@ -96,7 +114,12 @@ class WaveNet(nn.Module):
         # For conditioning: a single conv to produce per-layer cond slices if cond provided
         if self.cond_channels is not None:
             # project conditioning to a concatenation of per-layer (2*hidden) slices
-            self.cond_layer = nn.Conv1d(self.cond_channels, self.n_layers * 2 * self.hidden_channels, kernel_size=1, bias=False)
+            self.cond_layer = nn.Conv1d(
+                self.cond_channels,
+                self.n_layers * 2 * self.hidden_channels,
+                kernel_size=1,
+                bias=False,
+            )
         else:
             self.cond_layer = None
 
@@ -106,11 +129,13 @@ class WaveNet(nn.Module):
         for i in range(n_layers):
             # dilation cycle: 1,2,4,...,2^(cycle-1), repeat
             dilation = 2 ** (i % cycle)
-            block = ResidualGatedBlock(hidden_channels=self.hidden_channels,
-                                       kernel_size=self.kernel_size,
-                                       dilation=dilation,
-                                       cond_channels=self.cond_channels if self.cond_layer is not None else None,
-                                       dropout=self.dropout)
+            block = ResidualGatedBlock(
+                hidden_channels=self.hidden_channels,
+                kernel_size=self.kernel_size,
+                dilation=dilation,
+                cond_channels=self.cond_channels if self.cond_layer is not None else None,
+                dropout=self.dropout,
+            )
             self.in_layers.append(block)
 
         # final processing of accumulated skips -> map to input channels
@@ -118,7 +143,7 @@ class WaveNet(nn.Module):
             nn.ReLU(inplace=True),
             nn.Conv1d(self.hidden_channels, self.hidden_channels, kernel_size=1),
             nn.ReLU(inplace=True),
-            nn.Conv1d(self.hidden_channels, in_channels, kernel_size=1)
+            nn.Conv1d(self.hidden_channels, in_channels, kernel_size=1),
         )
 
     def forward(self, x, t=None, cond=None):
@@ -130,20 +155,22 @@ class WaveNet(nn.Module):
         """
         original_shape = x.shape
         is_4d = False
-        
+
         # support 4D input [B, C_in, F, T] from some callers
         if x.dim() == 4:
             is_4d = True
             B, C, F, T = x.shape
             # Reshape to [B*F, C, T] for processing
             x = x.permute(0, 2, 1, 3).reshape(B * F, C, T)
-        
+
         # support 4D input [B,1,C_in,T] (squeeze middle dim)
         elif x.dim() == 4 and x.shape[1] == 1:
             x = x.squeeze(1)
-            
+
         if x.dim() != 3:
-            raise ValueError(f"WaveNet expects x shape [B,C,T] or [B,1,C,T] or [B,C,F,T], got {original_shape}")
+            raise ValueError(
+                f"WaveNet expects x shape [B,C,T] or [B,1,C,T] or [B,C,F,T], got {original_shape}"
+            )
 
         B_proc = x.shape[0]
         T_proc = x.shape[2]
@@ -161,7 +188,9 @@ class WaveNet(nn.Module):
             cond_proj = None
 
         # accumulation of skip outputs - fix: use B_proc instead of B
-        skip_sum = torch.zeros((B_proc, self.hidden_channels, T_proc), device=h.device, dtype=h.dtype)
+        skip_sum = torch.zeros(
+            (B_proc, self.hidden_channels, T_proc), device=h.device, dtype=h.dtype
+        )
 
         for i, block in enumerate(self.in_layers):
             # get per-layer cond slice if available
@@ -178,9 +207,9 @@ class WaveNet(nn.Module):
             skip_sum = skip_sum + skip
 
         out = self.post_net(skip_sum)  # [B_proc, in_channels, T_proc]
-        
+
         # Reshape back to original format if input was 4D
         if is_4d:
             out = out.reshape(B, F, self.in_channels, T).permute(0, 2, 1, 3)  # [B, C, F, T]
-        
+
         return out

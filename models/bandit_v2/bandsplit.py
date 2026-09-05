@@ -114,9 +114,7 @@ class BandSplitModule(nn.Module):
 
         batch, in_chan, band_width, n_time = x.shape
 
-        z = torch.zeros(
-            size=(batch, self.n_bands, n_time, self.emb_dim), device=x.device
-        )
+        z = torch.zeros(size=(batch, self.n_bands, n_time, self.emb_dim), device=x.device)
 
         x = torch.permute(x, (0, 3, 1, 2)).contiguous()
 

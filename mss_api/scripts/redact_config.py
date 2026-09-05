@@ -27,17 +27,25 @@ def save_config(config: Union[ConfigDict, OmegaConf], save_path: str):
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
 
     try:
-        with open(save_path, 'w') as f:
+        with open(save_path, "w") as f:
             if isinstance(config, ConfigDict):
-                yaml.dump(config.to_dict(), f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+                yaml.dump(
+                    config.to_dict(),
+                    f,
+                    default_flow_style=False,
+                    sort_keys=False,
+                    allow_unicode=True,
+                )
             elif isinstance(config, OmegaConf):
                 OmegaConf.save(config, save_path)
             else:
                 OmegaConf.save(config, save_path)
     except Exception as e:
-        raise ValueError(f"Error saving configuration: {e}."
-                         f"Unsupported configuration type. Supported types: ConfigDict, OmegaConf."
-                         f"Config type is {type(config)}")
+        raise ValueError(
+            f"Error saving configuration: {e}."
+            f"Unsupported configuration type. Supported types: ConfigDict, OmegaConf."
+            f"Config type is {type(config)}"
+        )
 
 
 def create_test_config(original_config_path: str, new_config_path: str, model_type: str):
@@ -61,11 +69,11 @@ def create_test_config(original_config_path: str, new_config_path: str, model_ty
 
     config = load_config(model_type=model_type, config_path=original_config_path)
 
-    config['inference']['batch_size'] = 1
-    config['training']['batch_size'] = 1
-    config['training']['gradient_accumulation_steps'] = 1
-    config['training']['num_epochs'] = 2
-    config['training']['num_steps'] = 3
+    config["inference"]["batch_size"] = 1
+    config["training"]["batch_size"] = 1
+    config["training"]["gradient_accumulation_steps"] = 1
+    config["training"]["num_epochs"] = 2
+    config["training"]["num_steps"] = 3
 
     save_config(config, new_config_path)
     print(f"Test config created at: {new_config_path}")
@@ -83,9 +91,13 @@ def parse_args(dict_args: Union[Dict, None]) -> argparse.Namespace:
     """
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--orig_config", type=str, default="", help="Path to the original config file.")
+    parser.add_argument(
+        "--orig_config", type=str, default="", help="Path to the original config file."
+    )
     parser.add_argument("--model_type", type=str, default="", help="Model type")
-    parser.add_argument("--new_config", type=str, default="", help="Path to save the new test configuration file.")
+    parser.add_argument(
+        "--new_config", type=str, default="", help="Path to save the new test configuration file."
+    )
 
     if dict_args is not None:
         args = parser.parse_args([])
@@ -107,7 +119,7 @@ def parse_args(dict_args: Union[Dict, None]) -> argparse.Namespace:
 
 def redact_config(args):
     # Ensure proper imports for utilities
-    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
     args = parse_args(args)
 
@@ -116,5 +128,5 @@ def redact_config(args):
     return args.new_config
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     redact_config(None)

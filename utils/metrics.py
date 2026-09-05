@@ -4,6 +4,7 @@ import librosa
 import torch.nn.functional as F
 from typing import Dict, List, Tuple
 
+
 def sdr(references: np.ndarray, estimates: np.ndarray) -> float:
     """
     Compute Signal-to-Distortion Ratio (SDR) for one or more audio tracks.
@@ -55,22 +56,30 @@ def si_sdr(reference: np.ndarray, estimate: np.ndarray) -> float:
         The SI-SDR value for the source. It is a scalar representing the Signal-to-Distortion Ratio in decibels (dB).
     """
     eps = 1e-8  # To avoid numerical errors
-    scale = np.sum(estimate * reference + eps, axis=(0, 1)) / np.sum(reference ** 2 + eps, axis=(0, 1))
+    scale = np.sum(estimate * reference + eps, axis=(0, 1)) / np.sum(
+        reference**2 + eps, axis=(0, 1)
+    )
     scale = np.expand_dims(scale, axis=(0, 1))  # Reshape to [num_sources, 1]
 
     reference = reference * scale
-    si_sdr = np.mean(10 * np.log10(
-        np.sum(reference ** 2, axis=(0, 1)) / (np.sum((reference - estimate) ** 2, axis=(0, 1)) + eps) + eps))
+    si_sdr = np.mean(
+        10
+        * np.log10(
+            np.sum(reference**2, axis=(0, 1))
+            / (np.sum((reference - estimate) ** 2, axis=(0, 1)) + eps)
+            + eps
+        )
+    )
 
     return si_sdr
 
 
 def L1Freq_metric(
-        reference: np.ndarray,
-        estimate: np.ndarray,
-        fft_size: int = 2048,
-        hop_size: int = 1024,
-        device: str = 'cpu'
+    reference: np.ndarray,
+    estimate: np.ndarray,
+    fft_size: int = 2048,
+    hop_size: int = 1024,
+    device: str = "cpu",
 ) -> float:
     """
     Compute the L1 Frequency Metric between the reference and estimated audio signals.
@@ -104,12 +113,12 @@ def L1Freq_metric(
 
     reference = torch.from_numpy(reference).float().to(device)
     estimate = torch.from_numpy(estimate).float().to(device)
-    
+
     # Ensure shape is [channels, time] for multi-channel or [time] for mono
     if reference.ndim == 3:
         # Shape is [batch, time, channels] - squeeze batch and transpose
         reference = reference.squeeze(0).T  # [channels, time]
-        estimate = estimate.squeeze(0).T    # [channels, time]
+        estimate = estimate.squeeze(0).T  # [channels, time]
 
     reference_stft = torch.stft(reference, fft_size, hop_size, return_complex=True)
     estimated_stft = torch.stft(estimate, fft_size, hop_size, return_complex=True)
@@ -119,16 +128,16 @@ def L1Freq_metric(
 
     loss = 10 * F.l1_loss(estimate_mag, reference_mag)
 
-    ret = 100 / (1. + float(loss.cpu().numpy()))
+    ret = 100 / (1.0 + float(loss.cpu().numpy()))
 
     return ret
 
 
 def LogWMSE_metric(
-        reference: np.ndarray,
-        estimate: np.ndarray,
-        mixture: np.ndarray,
-        device: str = 'cpu',
+    reference: np.ndarray,
+    estimate: np.ndarray,
+    mixture: np.ndarray,
+    device: str = "cpu",
 ) -> float:
     """
     Calculate the Log-WMSE (Logarithmic Weighted Mean Squared Error) between the reference, estimate, and mixture signals.
@@ -158,6 +167,7 @@ def LogWMSE_metric(
         The Log-WMSE value, which quantifies the difference between the reference and estimated signal on a logarithmic scale.
     """
     from torch_log_wmse import LogWMSE
+
     log_wmse = LogWMSE(
         audio_length=reference.shape[-1] / 44100,  # audio length in seconds
         sample_rate=44100,  # sample rate of 44100 Hz
@@ -174,9 +184,9 @@ def LogWMSE_metric(
 
 
 def AuraSTFT_metric(
-        reference: np.ndarray,
-        estimate: np.ndarray,
-        device: str = 'cpu',
+    reference: np.ndarray,
+    estimate: np.ndarray,
+    device: str = "cpu",
 ) -> float:
     """
     Calculate the AuraSTFT metric, which evaluates the spectral difference between the reference and estimated
@@ -209,13 +219,13 @@ def AuraSTFT_metric(
     stft_loss = STFTLoss(
         w_log_mag=1.0,  # weight for log magnitude
         w_lin_mag=0.0,  # weight for linear magnitude
-        w_sc=1.0,       # weight for spectral centroid
+        w_sc=1.0,  # weight for spectral centroid
         device=device,
     )
 
     reference = torch.from_numpy(reference).float().to(device)
     estimate = torch.from_numpy(estimate).float().to(device)
-    
+
     # Ensure shape is [batch, channels, time]
     if reference.ndim == 3:
         # Input is [batch, time, channels] - need to permute to [batch, channels, time]
@@ -225,15 +235,15 @@ def AuraSTFT_metric(
         # Input is [channels, time] - add batch dimension
         reference = reference.unsqueeze(0)
         estimate = estimate.unsqueeze(0)
-    
-    res = 100 / (1. + 10 * stft_loss(reference, estimate))
+
+    res = 100 / (1.0 + 10 * stft_loss(reference, estimate))
     return float(res.cpu().numpy())
 
 
 def AuraMRSTFT_metric(
-        reference: np.ndarray,
-        estimate: np.ndarray,
-        device: str = 'cpu',
+    reference: np.ndarray,
+    estimate: np.ndarray,
+    device: str = "cpu",
 ) -> float:
     """
     Calculate the AuraMRSTFT metric, which evaluates the spectral difference between the reference and estimated
@@ -268,15 +278,15 @@ def AuraMRSTFT_metric(
         hop_sizes=[256, 512, 1024],
         win_lengths=[1024, 2048, 4096],
         scale="mel",  # mel scale for frequency resolution
-        n_bins=128,   # number of bins for mel scale
+        n_bins=128,  # number of bins for mel scale
         sample_rate=44100,
         perceptual_weighting=True,  # apply perceptual weighting
-        device=device
+        device=device,
     )
 
     reference = torch.from_numpy(reference).float().to(device)
     estimate = torch.from_numpy(estimate).float().to(device)
-    
+
     # Ensure shape is [batch, channels, time]
     if reference.ndim == 3:
         # Input is [batch, time, channels] - need to permute to [batch, channels, time]
@@ -287,18 +297,18 @@ def AuraMRSTFT_metric(
         reference = reference.unsqueeze(0)
         estimate = estimate.unsqueeze(0)
 
-    res = 100 / (1. + 10 * mrstft_loss(reference, estimate))
+    res = 100 / (1.0 + 10 * mrstft_loss(reference, estimate))
     return float(res.cpu().numpy())
 
 
 def bleed_full(
-        reference: np.ndarray,
-        estimate: np.ndarray,
-        sr: int = 44100,
-        n_fft: int = 4096,
-        hop_length: int = 1024,
-        n_mels: int = 512,
-        device: str = 'cpu',
+    reference: np.ndarray,
+    estimate: np.ndarray,
+    sr: int = 44100,
+    n_fft: int = 4096,
+    hop_length: int = 1024,
+    n_mels: int = 512,
+    device: str = "cpu",
 ) -> Tuple[float, float]:
     """
     Calculate the 'bleed' and 'fullness' metrics between a reference and an estimated audio signal.
@@ -343,19 +353,35 @@ def bleed_full(
 
     reference = torch.from_numpy(reference).float().to(device)
     estimate = torch.from_numpy(estimate).float().to(device)
-    
+
     # Ensure shape is [channels, time]
     if reference.ndim == 3:
         reference = reference.squeeze(0).T  # [channels, time]
-        estimate = estimate.squeeze(0).T    # [channels, time]
+        estimate = estimate.squeeze(0).T  # [channels, time]
 
     window = torch.hann_window(n_fft).to(device)
 
     # Compute STFTs with the Hann window
-    D1 = torch.abs(torch.stft(reference, n_fft=n_fft, hop_length=hop_length, window=window, return_complex=True,
-                              pad_mode="constant"))
-    D2 = torch.abs(torch.stft(estimate, n_fft=n_fft, hop_length=hop_length, window=window, return_complex=True,
-                              pad_mode="constant"))
+    D1 = torch.abs(
+        torch.stft(
+            reference,
+            n_fft=n_fft,
+            hop_length=hop_length,
+            window=window,
+            return_complex=True,
+            pad_mode="constant",
+        )
+    )
+    D2 = torch.abs(
+        torch.stft(
+            estimate,
+            n_fft=n_fft,
+            hop_length=hop_length,
+            window=window,
+            return_complex=True,
+            pad_mode="constant",
+        )
+    )
 
     mel_basis = librosa.filters.mel(sr=sr, n_fft=n_fft, n_mels=n_mels)
     mel_filter_bank = torch.from_numpy(mel_basis).to(device)
@@ -371,8 +397,12 @@ def bleed_full(
     positive_diff = diff[diff > 0]
     negative_diff = diff[diff < 0]
 
-    average_positive = torch.mean(positive_diff) if positive_diff.numel() > 0 else torch.tensor(0.0).to(device)
-    average_negative = torch.mean(negative_diff) if negative_diff.numel() > 0 else torch.tensor(0.0).to(device)
+    average_positive = (
+        torch.mean(positive_diff) if positive_diff.numel() > 0 else torch.tensor(0.0).to(device)
+    )
+    average_negative = (
+        torch.mean(negative_diff) if negative_diff.numel() > 0 else torch.tensor(0.0).to(device)
+    )
 
     bleedless = 100 * 1 / (average_positive + 1)
     fullness = 100 * 1 / (-average_negative + 1)
@@ -381,11 +411,11 @@ def bleed_full(
 
 
 def get_metrics(
-        metrics: List[str],
-        reference: np.ndarray,
-        estimate: np.ndarray,
-        mix: np.ndarray = None,
-        device: str = 'cpu',
+    metrics: List[str],
+    reference: np.ndarray,
+    estimate: np.ndarray,
+    mix: np.ndarray = None,
+    device: str = "cpu",
 ) -> List[Tuple[str, float]]:
     """
     Calculate a list of metrics to evaluate the performance of audio source separation models.
@@ -423,40 +453,40 @@ def get_metrics(
     if mix is not None:
         mix = mix[..., :min_length]
 
-    if 'sdr' in metrics:
+    if "sdr" in metrics:
         references = np.expand_dims(reference, axis=0)
         estimates = np.expand_dims(estimate, axis=0)
         sdr_values = sdr(references, estimates)  # Returns array of SDR per source
         sdr_value = np.mean(sdr_values)  # Take mean across all sources/channels
-        result.append(('sdr', float(sdr_value)))
+        result.append(("sdr", float(sdr_value)))
 
-    if 'si_sdr' in metrics:
+    if "si_sdr" in metrics:
         si_sdr_value = si_sdr(reference, estimate)
-        result.append(('si_sdr', float(si_sdr_value)))
+        result.append(("si_sdr", float(si_sdr_value)))
 
-    if 'l1_freq' in metrics:
+    if "l1_freq" in metrics:
         l1_freq_value = L1Freq_metric(reference, estimate, device=device)
-        result.append(('l1_freq', float(l1_freq_value)))
+        result.append(("l1_freq", float(l1_freq_value)))
 
-    if 'log_wmse' in metrics:
+    if "log_wmse" in metrics:
         if mix is None:
             raise ValueError("'mix' parameter is required for 'log_wmse' metric")
         log_wmse_value = LogWMSE_metric(reference, estimate, mix, device)
-        result.append(('log_wmse', float(log_wmse_value)))
+        result.append(("log_wmse", float(log_wmse_value)))
 
-    if 'aura_stft' in metrics:
+    if "aura_stft" in metrics:
         aura_stft_value = AuraSTFT_metric(reference, estimate, device)
-        result.append(('aura_stft', float(aura_stft_value)))
+        result.append(("aura_stft", float(aura_stft_value)))
 
-    if 'aura_mrstft' in metrics:
+    if "aura_mrstft" in metrics:
         aura_mrstft_value = AuraMRSTFT_metric(reference, estimate, device)
-        result.append(('aura_mrstft', float(aura_mrstft_value)))
+        result.append(("aura_mrstft", float(aura_mrstft_value)))
 
-    if 'bleedless' in metrics or 'fullness' in metrics:
+    if "bleedless" in metrics or "fullness" in metrics:
         bleedless_value, fullness_value = bleed_full(reference, estimate, device=device)
-        if 'bleedless' in metrics:
-            result.append(('bleedless', float(bleedless_value)))
-        if 'fullness' in metrics:
-            result.append(('fullness', float(fullness_value)))
+        if "bleedless" in metrics:
+            result.append(("bleedless", float(bleedless_value)))
+        if "fullness" in metrics:
+            result.append(("fullness", float(fullness_value)))
 
     return result

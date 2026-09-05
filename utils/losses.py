@@ -12,7 +12,7 @@ from torch_log_wmse import LogWMSE
 def multistft_loss(
     y_: torch.Tensor,
     y: torch.Tensor,
-    loss_multistft: Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
+    loss_multistft: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
 ) -> torch.Tensor:
     """
     Compute a (multi-resolution) STFT-based loss on waveforms.
@@ -42,16 +42,13 @@ def multistft_loss(
     elif len(y_.shape) == 3:
         y1 = y
     if len(y_.shape) not in [3, 4]:
-        raise ValueError(f"Invalid shape for predicted array: {y_.shape}. Expected 3 or 4 dimensions.")
+        raise ValueError(
+            f"Invalid shape for predicted array: {y_.shape}. Expected 3 or 4 dimensions."
+        )
     return loss_multistft(y1_, y1)
 
 
-def masked_loss(
-    y_: torch.Tensor,
-    y: torch.Tensor,
-    q: float,
-    coarse: bool = True
-) -> torch.Tensor:
+def masked_loss(y_: torch.Tensor, y: torch.Tensor, q: float, coarse: bool = True) -> torch.Tensor:
     """
     Robust, quantile-masked MSE (“trimmed” MSE).
 
@@ -71,19 +68,17 @@ def masked_loss(
         torch.Tensor: Scalar loss tensor.
     """
 
-    loss = torch.nn.MSELoss(reduction='none')(y_, y).transpose(0, 1)
+    loss = torch.nn.MSELoss(reduction="none")(y_, y).transpose(0, 1)
     if coarse:
         loss = loss.mean(dim=(-1, -2))
     loss = loss.reshape(loss.shape[0], -1)
-    quantile = torch.quantile(loss.detach(), q, interpolation='linear', dim=1, keepdim=True)
+    quantile = torch.quantile(loss.detach(), q, interpolation="linear", dim=1, keepdim=True)
     mask = loss < quantile
     return (loss * mask).mean()
 
 
 def spec_rmse_loss(
-    estimate: torch.Tensor,
-    sources: torch.Tensor,
-    stft_config: dict
+    estimate: torch.Tensor, sources: torch.Tensor, stft_config: dict
 ) -> torch.Tensor:
     """
     RMSE in the complex STFT domain.
@@ -116,7 +111,7 @@ def spec_rmse_loss(
     spec_estimate = spec_estimate.view(*new_shape)
     spec_sources = spec_sources.view(*new_shape)
 
-    loss = F.mse_loss(spec_estimate, spec_sources, reduction='none')
+    loss = F.mse_loss(spec_estimate, spec_sources, reduction="none")
 
     dims = tuple(range(2, loss.dim()))
     loss = loss.mean(dims).sqrt().mean(dim=(0, 1))
@@ -129,7 +124,7 @@ def spec_masked_loss(
     sources: torch.Tensor,
     stft_config: dict,
     q: float = 0.9,
-    coarse: bool = True
+    coarse: bool = True,
 ) -> torch.Tensor:
     """
     Quantile-masked MSE in the complex STFT domain.
@@ -165,20 +160,14 @@ def spec_masked_loss(
     spec_estimate = spec_estimate.view(*new_shape)
     spec_sources = spec_sources.view(*new_shape)
 
-    loss = F.mse_loss(spec_estimate, spec_sources, reduction='none')
+    loss = F.mse_loss(spec_estimate, spec_sources, reduction="none")
 
     if coarse:
         loss = loss.mean(dim=(-3, -2))
 
     loss = loss.reshape(loss.shape[0], -1)
 
-    quantile = torch.quantile(
-        loss.detach(),
-        q,
-        interpolation='linear',
-        dim=1,
-        keepdim=True
-    )
+    quantile = torch.quantile(loss.detach(), q, interpolation="linear", dim=1, keepdim=True)
 
     mask = loss < quantile
 
@@ -188,8 +177,7 @@ def spec_masked_loss(
 
 
 def choice_loss(
-    args: argparse.Namespace,
-    config: ConfigDict
+    args: argparse.Namespace, config: ConfigDict
 ) -> Callable[[Any, Any, Any | None], torch.Tensor]:
     """
     Build a composite loss from CLI/config options.
@@ -216,73 +204,82 @@ def choice_loss(
 
     loss_fns = []
 
-    if 'masked_loss' in args.loss:
+    if "masked_loss" in args.loss:
         loss_fns.append(
-            lambda y_pred, y_true, x=None:
-            masked_loss(y_pred, y_true,
-                        q=config['training']['q'],
-                        coarse=config['training']['coarse_loss_clip'])
-            * args.masked_loss_coef
+            lambda y_pred, y_true, x=None: (
+                masked_loss(
+                    y_pred,
+                    y_true,
+                    q=config["training"]["q"],
+                    coarse=config["training"]["coarse_loss_clip"],
+                )
+                * args.masked_loss_coef
+            )
         )
 
-    if 'mse_loss' in args.loss:
+    if "mse_loss" in args.loss:
         mse = nn.MSELoss()
-        loss_fns.append(
-            lambda y_pred, y_true, x=None: mse(y_pred, y_true) * args.mse_loss_coef
-        )
+        loss_fns.append(lambda y_pred, y_true, x=None: mse(y_pred, y_true) * args.mse_loss_coef)
 
-    if 'l1_loss' in args.loss:
+    if "l1_loss" in args.loss:
         loss_fns.append(
             lambda y_pred, y_true, x=None: F.l1_loss(y_pred, y_true) * args.l1_loss_coef
         )
 
-    if 'multistft_loss' in args.loss:
-        loss_options = dict(config.get('loss_multistft', {}))
+    if "multistft_loss" in args.loss:
+        loss_options = dict(config.get("loss_multistft", {}))
         stft_loss = auraloss.freq.MultiResolutionSTFTLoss(**loss_options)
         loss_fns.append(
-            lambda y_pred, y_true, x=None: multistft_loss(y_pred, y_true, stft_loss)
-                                           * args.multistft_loss_coef
+            lambda y_pred, y_true, x=None: (
+                multistft_loss(y_pred, y_true, stft_loss) * args.multistft_loss_coef
+            )
         )
 
-    if 'log_wmse_loss' in args.loss:
+    if "log_wmse_loss" in args.loss:
         log_wmse = LogWMSE(
-            audio_length=int(getattr(config.audio, 'chunk_size', 485100))
-                         // int(getattr(config.audio, 'sample_rate', 44100)),
-            sample_rate=int(getattr(config.audio, 'sample_rate', 44100)),
+            audio_length=int(getattr(config.audio, "chunk_size", 485100))
+            // int(getattr(config.audio, "sample_rate", 44100)),
+            sample_rate=int(getattr(config.audio, "sample_rate", 44100)),
             return_as_loss=True,
-            bypass_filter=getattr(config.training, 'bypass_filter', False),
+            bypass_filter=getattr(config.training, "bypass_filter", False),
         )
         loss_fns.append(
-            lambda y_pred, y_true, x: log_wmse(x, y_pred, y_true)
-                                           * args.log_wmse_loss_coef
+            lambda y_pred, y_true, x: log_wmse(x, y_pred, y_true) * args.log_wmse_loss_coef
         )
 
-    if 'spec_rmse_loss' in args.loss:
+    if "spec_rmse_loss" in args.loss:
         stft_config = {
-            'n_fft': getattr(config.model, 'nfft', 4096),
-            'hop_length': getattr(config.model, 'hop_size', 1024),
-            'win_length': getattr(config.model, 'win_size', 4096),
-            'center': True,
-            'normalized': getattr(config.model, 'normalized', True)
+            "n_fft": getattr(config.model, "nfft", 4096),
+            "hop_length": getattr(config.model, "hop_size", 1024),
+            "win_length": getattr(config.model, "win_size", 4096),
+            "center": True,
+            "normalized": getattr(config.model, "normalized", True),
         }
         loss_fns.append(
-            lambda y_pred, y_true, x=None: spec_rmse_loss(y_pred, y_true, stft_config) *
-                                           args.spec_rmse_loss_coef)
+            lambda y_pred, y_true, x=None: (
+                spec_rmse_loss(y_pred, y_true, stft_config) * args.spec_rmse_loss_coef
+            )
+        )
 
-    if 'spec_masked_loss' in args.loss:
+    if "spec_masked_loss" in args.loss:
         stft_config = {
-            'n_fft': getattr(config.model, 'nfft', 4096),
-            'hop_length': getattr(config.model, 'hop_size', 1024),
-            'win_length': getattr(config.model, 'win_size', 4096),
-            'center': True,
-            'normalized': getattr(config.model, 'normalized', True)
+            "n_fft": getattr(config.model, "nfft", 4096),
+            "hop_length": getattr(config.model, "hop_size", 1024),
+            "win_length": getattr(config.model, "win_size", 4096),
+            "center": True,
+            "normalized": getattr(config.model, "normalized", True),
         }
         loss_fns.append(
-            lambda y_pred, y_true, x=None: spec_masked_loss(y_pred, y_true,
-                                                            stft_config,
-                                                            q=config['training']['q'],
-                                                            coarse=config['training']['coarse_loss_clip'])
-                                           * args.spec_masked_loss_coef
+            lambda y_pred, y_true, x=None: (
+                spec_masked_loss(
+                    y_pred,
+                    y_true,
+                    stft_config,
+                    q=config["training"]["q"],
+                    coarse=config["training"]["coarse_loss_clip"],
+                )
+                * args.spec_masked_loss_coef
+            )
         )
 
     def multi_loss(y_pred: Any, y_true: Any, x: Optional[Any] = None) -> torch.Tensor:

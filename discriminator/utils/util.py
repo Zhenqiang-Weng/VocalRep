@@ -13,22 +13,22 @@ import soundfile as sf
 
 
 def select_device(device):
-    cpu_request = device.lower() == 'cpu'
+    cpu_request = device.lower() == "cpu"
     # if device requested other than 'cpu'
     if device and not cpu_request:
-        c = 1024 ** 2  # bytes to MB
+        c = 1024**2  # bytes to MB
         x = torch.cuda.get_device_properties(int(device))
-        s = f'Using torch {torch.__version__} '
+        s = f"Using torch {torch.__version__} "
         print("%sCUDA:%s (%s, %dMB)" % (s, device, x.name, x.total_memory / c))
-        return torch.device(f'cuda:{device}')
+        return torch.device(f"cuda:{device}")
     else:
-        print(f'Using torch {torch.__version__} CPU')
-        return torch.device('cpu')
+        print(f"Using torch {torch.__version__} CPU")
+        return torch.device("cpu")
 
 
 def last_checkpoint(logdir):
     """Returns the last checkpoint file name in the given log dir path."""
-    checkpoints = glob.glob(os.path.join(logdir, 'checkpoint_*'))
+    checkpoints = glob.glob(os.path.join(logdir, "checkpoint_*"))
     checkpoints.sort()
     if len(checkpoints) == 0:
         return None
@@ -38,12 +38,12 @@ def last_checkpoint(logdir):
 def load_checkpoint(checkpoint_file_name, model, optimizer, device):
     """Loads the checkpoint into the given model and optimizer."""
     checkpoint = torch.load(checkpoint_file_name, map_location=device)
-    model.load_state_dict(checkpoint['model'])
+    model.load_state_dict(checkpoint["model"])
     model.float()
     if optimizer is not None:
-        optimizer.load_state_dict(checkpoint['optimizer'])
-    epoch = checkpoint.get('epoch', 0)
-    step = checkpoint.get('step', 0)
+        optimizer.load_state_dict(checkpoint["optimizer"])
+    epoch = checkpoint.get("epoch", 0)
+    step = checkpoint.get("step", 0)
     del checkpoint
     print("Loaded checkpoint epoch=%d step=%d" % (epoch, step))
     return epoch, step
@@ -51,13 +51,13 @@ def load_checkpoint(checkpoint_file_name, model, optimizer, device):
 
 def save_checkpoint(logdir, epoch, global_step, model, optimizer):
     """Saves the training state into the given log dir path."""
-    checkpoint_file_name = os.path.join(logdir, 'step-%03dK.pth' % (global_step // 1000))
+    checkpoint_file_name = os.path.join(logdir, "step-%03dK.pth" % (global_step // 1000))
     print("Saving the checkpoint file '%s'..." % checkpoint_file_name)
     checkpoint = {
-        'epoch': epoch,
-        'step': global_step,
-        'state_dict': model.state_dict(),
-        'optimizer': optimizer.state_dict(),
+        "epoch": epoch,
+        "step": global_step,
+        "state_dict": model.state_dict(),
+        "optimizer": optimizer.state_dict(),
     }
     torch.save(checkpoint, checkpoint_file_name)
     del checkpoint
@@ -67,11 +67,13 @@ def download_file(url, file_path):
     """Downloads a file from the given URL."""
     print("Downloading %s..." % url)
     r = requests.get(url, stream=True)
-    total_size = int(r.headers.get('content-length', 0))
+    total_size = int(r.headers.get("content-length", 0))
     block_size = 1024 * 1024
     wrote = 0
-    with open(file_path, 'wb') as f:
-        for data in tqdm(r.iter_content(block_size), total=math.ceil(total_size // block_size), unit='MB'):
+    with open(file_path, "wb") as f:
+        for data in tqdm(
+            r.iter_content(block_size), total=math.ceil(total_size // block_size), unit="MB"
+        ):
             wrote = wrote + len(data)
             f.write(data)
 
@@ -88,26 +90,28 @@ def save_to_png(file_name, array):
 
 
 def get_symbols(symbols_list):
-    with open (symbols_list) as fp:
-        symbols = [l.rstrip('\n') for l in fp.readlines()]
+    with open(symbols_list) as fp:
+        symbols = [l.rstrip("\n") for l in fp.readlines()]
     return symbols, len(symbols)
 
-def get_statistics(statfile, key='mel'):
-    with open(statfile, 'r', encoding='utf-8') as fp:
+
+def get_statistics(statfile, key="mel"):
+    with open(statfile, "r", encoding="utf-8") as fp:
         statistics = json.load(fp)
     return statistics[key]
 
+
 def load_metadata(filepath, withlabel=True, split="|"):
     if withlabel:
-        with open(filepath,encoding='utf-8')as f:
-            metadata =[line.strip().split(split) for line in f]
+        with open(filepath, encoding="utf-8") as f:
+            metadata = [line.strip().split(split) for line in f]
     else:
-        with open(filepath, encoding='utf-8') as f:
-            metadata =[line.strip() for line in f]
+        with open(filepath, encoding="utf-8") as f:
+            metadata = [line.strip() for line in f]
     return metadata
 
 
-def	load_wavefile(filepath):
+def load_wavefile(filepath):
     audio = sf.SoundFile(filepath)
     bit_depth = int(audio.subtype[4:])
     # max_wav_value = float(2 **(bit_depth-1))

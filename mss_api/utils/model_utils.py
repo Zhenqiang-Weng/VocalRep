@@ -15,16 +15,17 @@ from .muon import SingleDeviceMuonWithAuxAdam
 import torch.distributed as dist
 from spk_extract import extract_dominant_speaker_embedding_with_clusters
 
+
 def demix(
     config: ConfigDict,
     model: torch.nn.Module,
     mix: torch.Tensor,
     device: torch.device,
-    pbar: bool = False
+    pbar: bool = False,
 ) -> Dict[str, np.ndarray]:
     """
     Perform audio source separation using the generic overlapping chunk strategy.
-    
+
     Args:
         config (ConfigDict): Configuration object.
         model (torch.nn.Module): Source separation model.
@@ -32,111 +33,112 @@ def demix(
         device (torch.device): Device on which to run inference.
         model_type (str): (Unused in simplified version, kept for compatibility).
         pbar (bool, optional): If True, show a progress bar.
-    
+
     Returns:
         Dict[str, np.ndarray]: Dictionary mapping instrument names to separated waveforms.
     """
-    
-    # 检查是否为主进程 (用于控制进度条显示)
+
+    # Check the main process to control progress bar display
     should_print = not dist.is_initialized() or dist.get_rank() == 0
-    
+
     mix = torch.tensor(mix, dtype=torch.float32)
-    
+
     # ---------------------------------------------------
-    # 1. 配置参数初始化 (仅保留 Generic 模式逻辑)
+    # 1. Initialize configuration for generic mode
     # ---------------------------------------------------
-    if 'chunk_size' in config.inference:
+    if "chunk_size" in config.inference:
         chunk_size = config.inference.chunk_size
     else:
         chunk_size = config.audio.chunk_size
-        
+
     instruments = prefer_target_instrument(config)
     num_instruments = len(instruments)
     num_overlap = config.inference.num_overlap
-    
+
     fade_size = chunk_size // 10
     step = chunk_size // num_overlap
     border = chunk_size - step
     length_init = mix.shape[-1]
-    
+
     windowing_array = _getWindowingArray(chunk_size, fade_size)
-    
 
     if length_init > 2 * border and border > 0:
         mix = nn.functional.pad(mix, (border, border), mode="reflect")
-        
+
     batch_size = config.inference.batch_size
-    use_amp = getattr(config.training, 'use_amp', True)
+    use_amp = getattr(config.training, "use_amp", True)
 
     # ---------------------------------------------------
-    # 3. 推理循环
+    # 3. Inference loop
     # ---------------------------------------------------
     with torch.cuda.amp.autocast(enabled=use_amp):
         with torch.inference_mode():
             req_shape = (num_instruments,) + mix.shape
             result = torch.zeros(req_shape, dtype=torch.float32)
             counter = torch.zeros(req_shape, dtype=torch.float32)
-            
+
             i = 0
             batch_data = []
             batch_locations = []
-            
-            
+
             while i < mix.shape[1]:
-                # 截取分片
-                part = mix[:, i:i + chunk_size].to(device)
+                # Slice a chunk
+                part = mix[:, i : i + chunk_size].to(device)
                 chunk_len = part.shape[-1]
-                
-                # Padding 策略：如果不满 chunk_size，需要补零
-                # 只有 generic 模式下，如果片段够长才用 reflect，否则用 constant
+
+                # Pad incomplete chunks to chunk_size
+                # Use reflection padding for sufficiently long generic chunks; otherwise use constant padding
                 if chunk_len > chunk_size // 2:
                     pad_mode = "reflect"
                 else:
                     pad_mode = "constant"
-                
+
                 part = nn.functional.pad(part, (0, chunk_size - chunk_len), mode=pad_mode, value=0)
-                
+
                 batch_data.append(part)
                 batch_locations.append((i, chunk_len))
                 i += step
-                
+
                 # -----------------------------------------------
-                # 4. 批量推理与加窗叠加
+                # 4. Batch inference and windowed overlap-add
                 # -----------------------------------------------
                 if len(batch_data) >= batch_size or i >= mix.shape[1]:
                     arr = torch.stack(batch_data, dim=0)
-                    # 模型前向传播
+                    # Model forward pass
                     x = model(arr)
-                    
-                    # 准备 Window
-                    window = windowing_array.clone() # clone 避免 batch_size=1 时的副作用
-                    
-                    # 边界处理：首尾不需要 fade
-                    if i - step == 0:  # 第一块
+
+                    # Prepare the window
+                    window = (
+                        windowing_array.clone()
+                    )  # Clone to avoid side effects when batch_size=1
+
+                    # Disable fades at the first and last boundaries
+                    if i - step == 0:  # First chunk
                         window[:fade_size] = 1
-                    elif i >= mix.shape[1]:  # 最后一块
+                    elif i >= mix.shape[1]:  # Last chunk
                         window[-fade_size:] = 1
-                    
-                    # 叠加结果
+
+                    # Accumulate the result
                     for j, (start, seg_len) in enumerate(batch_locations):
-                        # 加窗累加
-                        result[..., start:start + seg_len] += x[j, ..., :seg_len].cpu() * window[..., :seg_len]
-                        # 记录权重
-                        counter[..., start:start + seg_len] += window[..., :seg_len]
-                    
+                        # Apply the window and accumulate
+                        result[..., start : start + seg_len] += (
+                            x[j, ..., :seg_len].cpu() * window[..., :seg_len]
+                        )
+                        # Accumulate weights
+                        counter[..., start : start + seg_len] += window[..., :seg_len]
+
                     batch_data.clear()
                     batch_locations.clear()
 
             estimated_sources = result / counter
             estimated_sources = estimated_sources.cpu().numpy()
             np.nan_to_num(estimated_sources, copy=False, nan=0.0)
-            
-            # 去除之前添加的 border
+
+            # Remove the previously added border
             if length_init > 2 * border and border > 0:
                 estimated_sources = estimated_sources[..., border:-border]
 
     return {k: v for k, v in zip(instruments, estimated_sources)}
-
 
 
 def demix_with_spk(
@@ -157,7 +159,7 @@ def demix_with_spk(
     # FORCE GENERIC MODE ONLY
     # =========================
 
-    if 'chunk_size' in config.inference:
+    if "chunk_size" in config.inference:
         chunk_size = config.inference.chunk_size
     else:
         chunk_size = config.audio.chunk_size
@@ -175,7 +177,7 @@ def demix_with_spk(
         mix = nn.functional.pad(mix, (border, border), mode="reflect")
 
     batch_size = config.inference.batch_size
-    use_amp = getattr(config.training, 'use_amp', True)
+    use_amp = getattr(config.training, "use_amp", True)
 
     with torch.cuda.amp.autocast(enabled=use_amp):
         with torch.inference_mode():
@@ -188,7 +190,7 @@ def demix_with_spk(
             batch_locations = []
 
             while i < mix.shape[1]:
-                part = mix[:, i:i + chunk_size].to(device)
+                part = mix[:, i : i + chunk_size].to(device)
                 chunk_len = part.shape[-1]
 
                 if chunk_len > chunk_size // 2:
@@ -196,10 +198,7 @@ def demix_with_spk(
                 else:
                     pad_mode = "constant"
 
-                part = nn.functional.pad(
-                    part, (0, chunk_size - chunk_len),
-                    mode=pad_mode, value=0
-                )
+                part = nn.functional.pad(part, (0, chunk_size - chunk_len), mode=pad_mode, value=0)
 
                 batch_data.append(part)
                 batch_locations.append((i, chunk_len))
@@ -223,10 +222,10 @@ def demix_with_spk(
                         window[-fade_size:] = 1
 
                     for j, (start, seg_len) in enumerate(batch_locations):
-                        result[..., start:start + seg_len] += (
+                        result[..., start : start + seg_len] += (
                             x[j, ..., :seg_len].cpu() * window[..., :seg_len]
                         )
-                        counter[..., start:start + seg_len] += window[..., :seg_len]
+                        counter[..., start : start + seg_len] += window[..., :seg_len]
 
                     batch_data.clear()
                     batch_locations.clear()
@@ -243,6 +242,7 @@ def demix_with_spk(
 
     return ret_data
 
+
 def demix_with_spk_2(
     config: ConfigDict,
     model: torch.nn.Module,
@@ -254,34 +254,34 @@ def demix_with_spk_2(
     max_clusters: int = 3,
     apply_gate: bool = False,
     gate_interval: float = 0.1,
-    gate_threshold: float = 0.01
+    gate_threshold: float = 0.01,
 ) -> Union[Dict[str, np.ndarray], np.ndarray]:
-    
+
     t0 = time.time()
 
     waveforms_blind = demix(config, model, mix, device)
-    
+
     t1 = time.time()
     print(f"[demix_with_spk_2] Blind Demix Cost: {t1 - t0:.3f}s")
-    
-    if 'vocals' in waveforms_blind:
-        vocals_for_embedding = waveforms_blind['vocals']
+
+    if "vocals" in waveforms_blind:
+        vocals_for_embedding = waveforms_blind["vocals"]
     else:
         first_instr = list(waveforms_blind.keys())[0]
         vocals_for_embedding = waveforms_blind[first_instr]
-    
+
     clustering_result = extract_dominant_speaker_embedding_with_clusters(
         model=spk_model,
         audio=vocals_for_embedding,
         segment_duration=segment_duration,
         energy_threshold=energy_threshold,
         max_clusters=max_clusters,
-        device=device
+        device=device,
     )
-    
+
     t2 = time.time()
     print(f"[demix_with_spk_2] Speaker Embedding Extraction Cost: {t2 - t1:.3f}s")
-    
+
     if clustering_result is None:
         print(f"[demix_with_spk_2] Total Cost: {time.time() - t0:.3f}s (Clustering Failed)")
         return waveforms_blind
@@ -292,27 +292,26 @@ def demix_with_spk_2(
         return waveforms_blind
 
     dominant_spk_emb = clustering_result.mean_embedding.to(device)
-    
-    waveforms = demix_with_spk(
-        config, model, mix, dominant_spk_emb, device
-    )
-    
+
+    waveforms = demix_with_spk(config, model, mix, dominant_spk_emb, device)
+
     if apply_gate:
         waveforms = apply_energy_gate(
             waveforms,
             gate_interval=gate_interval,
             energy_threshold=gate_threshold,
-            target_instrument='vocals'
+            target_instrument="vocals",
         )
-    
+
     t3 = time.time()
     print(f"[demix_with_spk_2] Guided Demix Cost: {t3 - t2:.3f}s")
-        
+
     return waveforms
 
 
-
-def initialize_model_and_device(model: torch.nn.Module, device_ids: List[int]) -> Tuple[Union[torch.device, str], torch.nn.Module]:
+def initialize_model_and_device(
+    model: torch.nn.Module, device_ids: List[int]
+) -> Tuple[Union[torch.device, str], torch.nn.Module]:
     """
     Move a model to the correct computation device and wrap with DataParallel if needed.
 
@@ -333,13 +332,13 @@ def initialize_model_and_device(model: torch.nn.Module, device_ids: List[int]) -
 
     if torch.cuda.is_available():
         if len(device_ids) <= 1:
-            device = torch.device(f'cuda:{device_ids[0]}')
+            device = torch.device(f"cuda:{device_ids[0]}")
             model = model.to(device)
         else:
-            device = torch.device(f'cuda:{device_ids[0]}')
+            device = torch.device(f"cuda:{device_ids[0]}")
             model = nn.DataParallel(model, device_ids=device_ids).to(device)
     else:
-        device = 'cpu'
+        device = "cpu"
         model = model.to(device)
         print("CUDA is not available. Running on CPU.")
 
@@ -370,40 +369,47 @@ def get_optimizer(config: ConfigDict, model: torch.nn.Module) -> torch.optim.Opt
 
     should_print = not dist.is_initialized() or dist.get_rank() == 0
     optim_params = dict()
-    if 'optimizer' in config:
-        optim_params = dict(config['optimizer'])
-        if config.training.optimizer != 'muon' and should_print:
-            print(f'Optimizer params from config:\n{optim_params}')
+    if "optimizer" in config:
+        optim_params = dict(config["optimizer"])
+        if config.training.optimizer != "muon" and should_print:
+            print(f"Optimizer params from config:\n{optim_params}")
 
-    name_optimizer = getattr(config.training, 'optimizer',
-                             'No optimizer in config')
+    name_optimizer = getattr(config.training, "optimizer", "No optimizer in config")
 
-    if name_optimizer == 'adam':
+    if name_optimizer == "adam":
         optimizer = Adam(model.parameters(), lr=config.training.lr, **optim_params)
-    elif name_optimizer == 'adamw':
+    elif name_optimizer == "adamw":
         optimizer = AdamW(model.parameters(), lr=config.training.lr, **optim_params)
-    elif name_optimizer == 'radam':
+    elif name_optimizer == "radam":
         optimizer = RAdam(model.parameters(), lr=config.training.lr, **optim_params)
-    elif name_optimizer == 'rmsprop':
+    elif name_optimizer == "rmsprop":
         optimizer = RMSprop(model.parameters(), lr=config.training.lr, **optim_params)
-    elif name_optimizer == 'prodigy':
+    elif name_optimizer == "prodigy":
         from prodigyopt import Prodigy
+
         # you can choose weight decay value based on your problem, 0 by default
         # We recommend using lr=1.0 (default) for all networks.
         optimizer = Prodigy(model.parameters(), lr=config.training.lr, **optim_params)
-    elif name_optimizer == 'adamw8bit':
+    elif name_optimizer == "adamw8bit":
         import bitsandbytes as bnb
+
         optimizer = bnb.optim.AdamW8bit(model.parameters(), lr=config.training.lr, **optim_params)
-    elif name_optimizer == 'muon':
+    elif name_optimizer == "muon":
         if should_print:
             print("Using Muon optimizer (Single-Device) with AdamW for auxiliary parameters.")
-        
+
         muon_params = [p for p in model.parameters() if p.ndim >= 2]
         adam_params = [p for p in model.parameters() if p.ndim < 2]
 
-        if not hasattr(config, 'optimizer') or 'muon_group' not in config.optimizer or 'adam_group' not in config.optimizer:
-            raise ValueError("For the 'muon' optimizer, the config must have an 'optimizer' section "
-                             "with 'muon_group' and 'adam_group' dictionaries.")
+        if (
+            not hasattr(config, "optimizer")
+            or "muon_group" not in config.optimizer
+            or "adam_group" not in config.optimizer
+        ):
+            raise ValueError(
+                "For the 'muon' optimizer, the config must have an 'optimizer' section "
+                "with 'muon_group' and 'adam_group' dictionaries."
+            )
 
         muon_group_config = dict(config.optimizer.muon_group)
         adam_group_config = dict(config.optimizer.adam_group)
@@ -417,13 +423,13 @@ def get_optimizer(config: ConfigDict, model: torch.nn.Module) -> torch.optim.Opt
             dict(params=adam_params, use_muon=False, **adam_group_config),
         ]
         optimizer = SingleDeviceMuonWithAuxAdam(param_groups)
-    elif name_optimizer == 'sgd':
+    elif name_optimizer == "sgd":
         if should_print:
-            print('Use SGD optimizer')
+            print("Use SGD optimizer")
         optimizer = SGD(model.parameters(), lr=config.training.lr, **optim_params)
     else:
         if should_print:
-            print(f'Unknown optimizer: {name_optimizer}')
+            print(f"Unknown optimizer: {name_optimizer}")
         exit()
     return optimizer
 
@@ -458,7 +464,7 @@ def apply_tta(
     mix: torch.Tensor,
     waveforms_orig: Dict[str, torch.Tensor],
     device: torch.device,
-    model_type: str
+    model_type: str,
 ) -> Dict[str, torch.Tensor]:
     """
     Enhance source separation results using Test-Time Augmentation (TTA).
@@ -536,27 +542,29 @@ def _getWindowingArray(window_size: int, fade_size: int) -> torch.Tensor:
 
 def prefer_target_instrument(config: ConfigDict) -> List[str]:
     """
-        Return the list of target instruments based on the configuration.
-        If a specific target instrument is specified in the configuration,
-        it returns a list with that instrument. Otherwise, it returns the list of instruments.
+    Return the list of target instruments based on the configuration.
+    If a specific target instrument is specified in the configuration,
+    it returns a list with that instrument. Otherwise, it returns the list of instruments.
 
-        Parameters:
-        ----------
-        config : ConfigDict
-            Configuration object containing the list of instruments or the target instrument.
+    Parameters:
+    ----------
+    config : ConfigDict
+        Configuration object containing the list of instruments or the target instrument.
 
-        Returns:
-        -------
-        List[str]
-            A list of target instruments.
-        """
-    if getattr(config.training, 'target_instrument', None):
+    Returns:
+    -------
+    List[str]
+        A list of target instruments.
+    """
+    if getattr(config.training, "target_instrument", None):
         return [config.training.target_instrument]
     else:
         return config.training.instruments
 
 
-def load_not_compatible_weights(model: torch.nn.Module, old_model: dict, verbose: bool = False) -> None:
+def load_not_compatible_weights(
+    model: torch.nn.Module, old_model: dict, verbose: bool = False
+) -> None:
     """
     Load a possibly incompatible state dict into `model` with best-effort matching.
 
@@ -578,30 +586,32 @@ def load_not_compatible_weights(model: torch.nn.Module, old_model: dict, verbose
 
     new_model = model.state_dict()
 
-    if 'state' in old_model:
+    if "state" in old_model:
         # Fix for htdemucs weights loading
-        old_model = old_model['state']
-    if 'state_dict' in old_model:
+        old_model = old_model["state"]
+    if "state_dict" in old_model:
         # Fix for apollo weights loading
-        old_model = old_model['state_dict']
-    if 'model_state_dict' in old_model:
+        old_model = old_model["state_dict"]
+    if "model_state_dict" in old_model:
         # Fix for full_check_point
-        old_model = old_model['model_state_dict']
+        old_model = old_model["model_state_dict"]
 
     for el in new_model:
         if el in old_model:
             if should_print:
-                print(f'Match found for {el}!')
+                print(f"Match found for {el}!")
             if new_model[el].shape == old_model[el].shape:
                 if should_print:
-                    print('Action: Just copy weights!')
+                    print("Action: Just copy weights!")
                 new_model[el] = old_model[el]
             else:
                 if len(new_model[el].shape) != len(old_model[el].shape) and should_print:
-                    print('Action: Different dimension! Too lazy to write the code... Skip it')
+                    print("Action: Different dimension! Too lazy to write the code... Skip it")
                 else:
                     if should_print:
-                        print(f'Shape is different: {tuple(new_model[el].shape)} != {tuple(old_model[el].shape)}')
+                        print(
+                            f"Shape is different: {tuple(new_model[el].shape)} != {tuple(old_model[el].shape)}"
+                        )
                     ln = len(new_model[el].shape)
                     max_shape = []
                     slices_old = []
@@ -621,13 +631,11 @@ def load_not_compatible_weights(model: torch.nn.Module, old_model: dict, verbose
                     new_model[el] = max_matrix[slices_new]
         else:
             if should_print:
-                print(f'Match not found for {el}!')
-    model.load_state_dict(
-        new_model
-    )
+                print(f"Match not found for {el}!")
+    model.load_state_dict(new_model)
 
 
-def load_lora_weights(model: torch.nn.Module, lora_path: str, device: str = 'cpu') -> None:
+def load_lora_weights(model: torch.nn.Module, lora_path: str, device: str = "cpu") -> None:
     """
     Load LoRA weights into a model.
     This function updates the given model with LoRA-specific weights from the specified checkpoint file.
@@ -651,10 +659,9 @@ def load_lora_weights(model: torch.nn.Module, lora_path: str, device: str = 'cpu
     model.load_state_dict(lora_state_dict, strict=False)
 
 
-def load_start_checkpoint(args: argparse.Namespace,
-                          model: torch.nn.Module,
-                          old_model,
-                          type_: str = 'train') -> None:
+def load_start_checkpoint(
+    args: argparse.Namespace, model: torch.nn.Module, old_model, type_: str = "train"
+) -> None:
     """
     Load an initial checkpoint into `model`.
 
@@ -676,32 +683,32 @@ def load_start_checkpoint(args: argparse.Namespace,
     should_print = not dist.is_initialized() or dist.get_rank() == 0
 
     if should_print:
-        print(f'Start from checkpoint: {args.start_check_point}')
-    if type_ in ['train']:
+        print(f"Start from checkpoint: {args.start_check_point}")
+    if type_ in ["train"]:
         if 1:
             load_not_compatible_weights(model, old_model, verbose=False)
         else:
             model.load_state_dict(torch.load(args.start_check_point))
     else:
-        device='cpu'
-        if args.model_type in ['htdemucs', 'apollo']:
+        device = "cpu"
+        if args.model_type in ["htdemucs", "apollo"]:
             state_dict = torch.load(args.start_check_point, map_location=device, weights_only=False)
             # Fix for htdemucs pretrained models
-            if 'state' in state_dict:
-                state_dict = state_dict['state']
+            if "state" in state_dict:
+                state_dict = state_dict["state"]
             # Fix for apollo pretrained models
-            if 'state_dict' in state_dict:
-                state_dict = state_dict['state_dict']
+            if "state_dict" in state_dict:
+                state_dict = state_dict["state_dict"]
         else:
-            if 'state' in old_model:
+            if "state" in old_model:
                 # Fix for htdemucs weights loading
-                old_model = old_model['state']
-            if 'state_dict' in old_model:
+                old_model = old_model["state"]
+            if "state_dict" in old_model:
                 # Fix for apollo weights loading
-                old_model = old_model['state_dict']
-            if 'model_state_dict' in old_model:
+                old_model = old_model["state_dict"]
+            if "model_state_dict" in old_model:
                 # Fix for full_check_point
-                old_model = old_model['model_state_dict']
+                old_model = old_model["model_state_dict"]
         model.load_state_dict(old_model, strict=False)
 
 
@@ -722,14 +729,14 @@ def bind_lora_to_model(config: Dict[str, Any], model: nn.Module) -> nn.Module:
         The modified model with the replaced layers.
     """
 
-    if 'lora' not in config:
+    if "lora" not in config:
         raise ValueError("Configuration must contain the 'lora' key with parameters for LoRA.")
 
     replaced_layers = 0  # Counter for replaced layers
     should_print = not dist.is_initialized() or dist.get_rank() == 0
 
     for name, module in model.named_modules():
-        hierarchy = name.split('.')
+        hierarchy = name.split(".")
         layer_name = hierarchy[-1]
 
         # Check if this is the target layer to replace (and layer_name == 'to_qkv')
@@ -748,8 +755,8 @@ def bind_lora_to_model(config: Dict[str, Any], model: nn.Module) -> nn.Module:
                         in_features=module.in_features,
                         out_features=module.out_features,
                         bias=module.bias is not None,
-                        **config['lora']
-                    )
+                        **config["lora"],
+                    ),
                 )
                 replaced_layers += 1  # Increment the counter
 
@@ -763,6 +770,7 @@ def bind_lora_to_model(config: Dict[str, Any], model: nn.Module) -> nn.Module:
         print(f"Number of layers replaced with LoRA: {replaced_layers}")
 
     return model
+
 
 def log_model_info(model: torch.nn.Module, results_path):
     """Log comprehensive model information"""
@@ -808,26 +816,31 @@ def log_model_info(model: torch.nn.Module, results_path):
         if len(list(module.children())) == 0:  # Only leaf modules
             layer_params = sum(p.numel() for p in module.parameters())
             if layer_params > 0:
-                layer_info.append({
-                    "name": name,
-                    "type": module.__class__.__name__,
-                    "parameters": layer_params,
-                })
+                layer_info.append(
+                    {
+                        "name": name,
+                        "type": module.__class__.__name__,
+                        "parameters": layer_params,
+                    }
+                )
 
     model_info["layers"] = layer_info
 
     if results_path:
         path = os.path.join(results_path, "model_info.json")
         # Save model info
-        with open(path, 'w') as f:
+        with open(path, "w") as f:
             json.dump(model_info, f, indent=2)
 
     # Log summary
-    if not dist.is_initialized() or dist.get_rank()==0:
+    if not dist.is_initialized() or dist.get_rank() == 0:
         print(f"Model: {model_info['model_class']}")
-        print(f"Total parameters: {model_info['parameters']['total']:,} ({model_info['parameters']['total_millions']}M)")
         print(
-            f"Trainable parameters: {model_info['parameters']['trainable']:,} ({model_info['parameters']['trainable_millions']}M)")
+            f"Total parameters: {model_info['parameters']['total']:,} ({model_info['parameters']['total_millions']}M)"
+        )
+        print(
+            f"Trainable parameters: {model_info['parameters']['trainable']:,} ({model_info['parameters']['trainable_millions']}M)"
+        )
         print(f"Model size: {model_info['memory']['total_mb']:.2f} MB")
         print(f"Number of layers: {len(layer_info)}")
 
@@ -841,7 +854,7 @@ def save_weights(
     all_time_all_metrics,
     best_metric: float,
     scheduler: Optional[torch.optim.lr_scheduler.ReduceLROnPlateau] = None,
-    train_lora: bool = False
+    train_lora: bool = False,
 ) -> None:
     """
     Save a training checkpoint containing model weights, optimizer/scheduler states, and metadata.
@@ -873,7 +886,7 @@ def save_weights(
         "optimizer_state_dict": optimizer.state_dict(),
         "scheduler_state_dict": scheduler.state_dict() if scheduler else None,
         "best_metric": best_metric,
-        "all_metrics": all_time_all_metrics
+        "all_metrics": all_time_all_metrics,
     }
 
     # Save model weights
@@ -940,51 +953,52 @@ def save_last_weights(
         args.train_lora,
     )
 
+
 def apply_energy_gate(
     waveforms: Dict[str, np.ndarray],
     sample_rate: int = 44100,
     gate_interval: float = 0.1,
     energy_threshold: float = 0.01,
-    target_instrument: str = 'vocals'
+    target_instrument: str = "vocals",
 ) -> Dict[str, np.ndarray]:
     """
-    对分离结果应用能量门控，将低能量片段置零
-    
+    Apply energy gating to separated waveforms, zeroing low-energy segments
+
     Args:
-        waveforms: 分离结果字典 {instrument: waveform}
-        sample_rate: 采样率
-        gate_interval: 检测间隔，秒 (default: 0.1s)
-        energy_threshold: 能量阈值，低于此值的片段置零 (default: 0.01)
-        target_instrument: 目标乐器，只对该乐器应用门控 (default: 'vocals')
-    
+        waveforms: Dictionary of separated waveforms {instrument: waveform}
+        sample_rate: Sample rate
+        gate_interval: Detection interval in seconds (default: 0.1s)
+        energy_threshold: Energy threshold below which segments are zeroed (default: 0.01)
+        target_instrument: Target instrument; apply gating only to this stem (default: 'vocals')
+
     Returns:
-        处理后的 waveforms 字典
+        Processed waveforms dictionary
     """
     if target_instrument not in waveforms:
         return waveforms
-    
+
     audio = waveforms[target_instrument]
     interval_samples = int(gate_interval * sample_rate)
     total_samples = audio.shape[-1]
-    
-    # 创建副本避免修改原数组
+
+    # Copy to avoid modifying the original array
     audio = audio.copy()
-    
+
     gated_count = 0
     total_intervals = 0
-    
+
     for start_idx in range(0, total_samples, interval_samples):
         end_idx = min(start_idx + interval_samples, total_samples)
         segment = audio[..., start_idx:end_idx]
-        
-        # 计算 RMS 能量
-        rms_energy = np.sqrt(np.mean(segment ** 2))
+
+        # Compute RMS energy
+        rms_energy = np.sqrt(np.mean(segment**2))
         total_intervals += 1
-        
+
         if rms_energy < energy_threshold:
             audio[..., start_idx:end_idx] = 0.0
             gated_count += 1
-    
+
     waveforms[target_instrument] = audio
-    
+
     return waveforms

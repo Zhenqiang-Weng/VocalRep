@@ -44,7 +44,7 @@ class DiscriminatorP(nn.Module):
         B, C, T = x.shape
         if T % self.period != 0:
             pad_len = self.period - (T % self.period)
-            x = F.pad(x, (0, pad_len), mode='reflect')
+            x = F.pad(x, (0, pad_len), mode="reflect" if pad_len < T else "constant")
             T = T + pad_len
         x = x.view(B, C, T // self.period, self.period)  # [B, 1, T//p, p]
 
@@ -69,22 +69,24 @@ class DiscriminatorS(nn.Module):
     def __init__(self, in_channels: int = 1, base_channels: int = 16):
         super().__init__()
         c = base_channels
-        self.layers = nn.ModuleList([
-            spectral_norm_conv1d(in_channels, c, 15, 1, padding=7),
-            nn.LeakyReLU(0.2, inplace=True),
-            spectral_norm_conv1d(c, c, 41, 2, padding=20, groups=4),
-            nn.LeakyReLU(0.2, inplace=True),
-            spectral_norm_conv1d(c, c * 2, 41, 2, padding=20, groups=16),
-            nn.LeakyReLU(0.2, inplace=True),
-            spectral_norm_conv1d(c * 2, c * 4, 41, 4, padding=20, groups=16),
-            nn.LeakyReLU(0.2, inplace=True),
-            spectral_norm_conv1d(c * 4, c * 8, 41, 4, padding=20, groups=16),
-            nn.LeakyReLU(0.2, inplace=True),
-            spectral_norm_conv1d(c * 8, c * 16, 41, 1, padding=20, groups=16),
-            nn.LeakyReLU(0.2, inplace=True),
-            spectral_norm_conv1d(c * 16, c * 16, 5, 1, padding=2),
-            nn.LeakyReLU(0.2, inplace=True),
-        ])
+        self.layers = nn.ModuleList(
+            [
+                spectral_norm_conv1d(in_channels, c, 15, 1, padding=7),
+                nn.LeakyReLU(0.2, inplace=True),
+                spectral_norm_conv1d(c, c, 41, 2, padding=20, groups=4),
+                nn.LeakyReLU(0.2, inplace=True),
+                spectral_norm_conv1d(c, c * 2, 41, 2, padding=20, groups=16),
+                nn.LeakyReLU(0.2, inplace=True),
+                spectral_norm_conv1d(c * 2, c * 4, 41, 4, padding=20, groups=16),
+                nn.LeakyReLU(0.2, inplace=True),
+                spectral_norm_conv1d(c * 4, c * 8, 41, 4, padding=20, groups=16),
+                nn.LeakyReLU(0.2, inplace=True),
+                spectral_norm_conv1d(c * 8, c * 16, 41, 1, padding=20, groups=16),
+                nn.LeakyReLU(0.2, inplace=True),
+                spectral_norm_conv1d(c * 16, c * 16, 5, 1, padding=2),
+                nn.LeakyReLU(0.2, inplace=True),
+            ]
+        )
         self.final = spectral_norm_conv1d(c * 16, 1, 3, 1, padding=1)
 
     def forward(self, x: torch.Tensor):
@@ -111,7 +113,7 @@ class MultiPeriodDiscriminator(nn.Module):
             y, fm = d(x)
             ys.append(y)
             fmaps.append(fm)
-        y_sum = sum(ys)
+        y_sum = torch.cat(ys, dim=1)
         # Flatten feature maps list-of-lists
         flat_fm = [f for sub in fmaps for f in sub]
         return y_sum, flat_fm
@@ -122,10 +124,16 @@ class MultiScaleDiscriminator(nn.Module):
         super().__init__()
         self.poolings = poolings
         self.discriminators = nn.ModuleList([DiscriminatorS() for _ in poolings])
-        self.avgpools = nn.ModuleList([
-            nn.Identity() if p == 1 else nn.AvgPool1d(kernel_size=p * 2, stride=p, padding=p // 2, count_include_pad=False)
-            for p in poolings
-        ])
+        self.avgpools = nn.ModuleList(
+            [
+                nn.Identity()
+                if p == 1
+                else nn.AvgPool1d(
+                    kernel_size=p * 2, stride=p, padding=p // 2, count_include_pad=False
+                )
+                for p in poolings
+            ]
+        )
 
     def forward(self, x: torch.Tensor):
         ys, fmaps = [], []
@@ -134,7 +142,7 @@ class MultiScaleDiscriminator(nn.Module):
             y, fm = disc(x_in)
             ys.append(y)
             fmaps.append(fm)
-        y_sum = sum(ys)
+        y_sum = torch.cat(ys, dim=1)
         flat_fm = [f for sub in fmaps for f in sub]
         return y_sum, flat_fm
 
@@ -158,6 +166,6 @@ class HiFiGANDiscriminator(nn.Module):
         assert x.dim() == 3 and x.size(1) == 1, "HiFiGANDiscriminator expects [B, 1, T] or [B, T]"
         y_mpd, h_mpd = self.mpd(x)
         y_msd, h_msd = self.msd(x)
-        y = y_mpd + y_msd
+        y = torch.cat([y_mpd, y_msd], dim=1)
         h_all = h_mpd + h_msd
         return y, None, h_all

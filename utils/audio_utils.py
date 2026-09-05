@@ -1,4 +1,3 @@
-
 import numpy as np
 import os
 import soundfile as sf
@@ -8,7 +7,9 @@ from typing import Dict, Tuple, Optional
 import torch.distributed as dist
 
 
-def read_audio_transposed(path: str, instr: Optional[str] = None, skip_err: bool = False) -> Tuple[Optional[np.ndarray], Optional[int]]:
+def read_audio_transposed(
+    path: str, instr: Optional[str] = None, skip_err: bool = False
+) -> Tuple[Optional[np.ndarray], Optional[int]]:
     """
     Read an audio file and return transposed waveform data with channels first.
 
@@ -63,8 +64,11 @@ def normalize_audio(audio: np.ndarray) -> Tuple[np.ndarray, Dict[str, float]]:
             - A dictionary with keys "mean" and "std" from the original audio.
     """
 
-    mono = audio.mean(0)
-    mean, std = mono.mean(), mono.std()
+    if audio.ndim not in (1, 2) or audio.size == 0 or not np.isfinite(audio).all():
+        raise ValueError("Expected non-empty, finite mono or multichannel audio.")
+    mono = audio if audio.ndim == 1 else audio.mean(axis=0)
+    mean = mono.mean()
+    std = max(float(mono.std()), 1e-8)
     return (audio - mean) / std, {"mean": mean, "std": std}
 
 
@@ -87,7 +91,9 @@ def denormalize_audio(audio: np.ndarray, norm_params: Dict[str, float]) -> np.nd
     return audio * norm_params["std"] + norm_params["mean"]
 
 
-def draw_spectrogram(waveform: np.ndarray, sample_rate: int, length: float, output_file: str) -> None:
+def draw_spectrogram(
+    waveform: np.ndarray, sample_rate: int, length: float, output_file: str
+) -> None:
     """
     Generate and save a spectrogram image from an audio waveform.
 
@@ -110,20 +116,17 @@ def draw_spectrogram(waveform: np.ndarray, sample_rate: int, length: float, outp
     import librosa.display
 
     # Cut only required part of spectorgram
-    x = waveform[:int(length * sample_rate), :]
+    x = waveform[: int(length * sample_rate), :]
     X = librosa.stft(x.mean(axis=-1))  # perform short-term fourier transform on mono signal
-    Xdb = librosa.amplitude_to_db(np.abs(X), ref=np.max)  # convert an amplitude spectrogram to dB-scaled spectrogram.
+    Xdb = librosa.amplitude_to_db(
+        np.abs(X), ref=np.max
+    )  # convert an amplitude spectrogram to dB-scaled spectrogram.
     fig, ax = plt.subplots()
     # plt.figure(figsize=(30, 10))  # initialize the fig size
     img = librosa.display.specshow(
-        Xdb,
-        cmap='plasma',
-        sr=sample_rate,
-        x_axis='time',
-        y_axis='linear',
-        ax=ax
+        Xdb, cmap="plasma", sr=sample_rate, x_axis="time", y_axis="linear", ax=ax
     )
-    ax.set(title='File: ' + os.path.basename(output_file))
+    ax.set(title="File: " + os.path.basename(output_file))
     fig.colorbar(img, ax=ax, format="%+2.f dB")
     if output_file is not None:
         plt.savefig(output_file)

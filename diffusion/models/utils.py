@@ -4,6 +4,7 @@ Compatibility shim for legacy imports.
 This module re-exports the lightweight SampleLocationAndConditionalFlow
 from the new `diffusion.utils` package so older imports continue to work.
 """
+
 from inspect import isfunction
 from typing import Callable, List, Optional, Sequence, TypeVar, Union, Dict, Tuple
 from typing_extensions import TypeGuard
@@ -13,44 +14,44 @@ from itertools import repeat
 
 T = TypeVar("T")
 
+
 class SampleLocationAndConditionalFlow:
     """
-    简化的采样辅助类
-    
-    为了保持向后兼容性，提供静态方法接口
+    Simplified sampling helper
+
+    Expose static methods for backward compatibility
     """
 
     @staticmethod
     def run(matcher, x0, x1, t=None):
         """
-        从ConditionalFlowMatcher采样xt和ut
-        
-        使用示例:
+        Sample xt and ut from ConditionalFlowMatcher
+
+        Example usage:
             fm = ConditionalFlowMatcher(sigma=0.1)
             noise = torch.randn(16, 32)
             x_real = torch.randn(16, 32)
-            
+
             t, xt, ut = SampleLocationAndConditionalFlow.run(
                 fm, x0=noise, x1=x_real
             )
-        
+
         Parameters
         ----------
         matcher : ConditionalFlowMatcher
-            Flow matcher实例
+            Flow matcher instance
         x0, x1 : Tensor
-            源和目标样本批次
+            Source and target sample batches
         t : Tensor or None
-            时间步; 如果为None，从Uniform(0,1)采样
+            Time step; sample from Uniform(0,1) if omitted
 
         Returns
         -------
         t : Tensor, shape (bs,)
-            采样的时间步
+            Sampled time steps
         xt : Tensor, shape (bs, *dim)
-            中间状态
+            Intermediate state
         ut : Tensor, shape (bs, *dim)
-            条件流场
+            Conditional flow field
         """
         return matcher.sample_location_and_conditional_flow(x0, x1, t)
-    

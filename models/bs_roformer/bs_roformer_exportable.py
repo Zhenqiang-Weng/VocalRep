@@ -13,8 +13,12 @@ from typing import Optional, Tuple
 from beartype import beartype
 
 from .bs_roformer import (
-    RMSNorm, BandSplit, MaskEstimator, ScaleTransformer,
-    DEFAULT_FREQS_PER_BANDS, exists
+    RMSNorm,
+    BandSplit,
+    MaskEstimator,
+    ScaleTransformer,
+    DEFAULT_FREQS_PER_BANDS,
+    exists,
 )
 from .conditioner import BandEmbedder
 from rotary_embedding_torch import RotaryEmbedding
@@ -28,21 +32,21 @@ class BDCSGBSRoformerExportable(Module):
 
     @beartype
     def __init__(
-            self,
-            dim,
-            *,
-            depth,
-            freqs_per_bands: Tuple[int, ...] = DEFAULT_FREQS_PER_BANDS,
-            dim_head=64,
-            heads=8,
-            attn_dropout=0.,
-            ff_dropout=0.,
-            flash_attn=True,
-            mask_estimator_depth=2,
-            mlp_expansion_factor=4,
-            skip_connection=False,
-            sage_attention=False,
-            spk_embd_dim=192,
+        self,
+        dim,
+        *,
+        depth,
+        freqs_per_bands: Tuple[int, ...] = DEFAULT_FREQS_PER_BANDS,
+        dim_head=64,
+        heads=8,
+        attn_dropout=0.0,
+        ff_dropout=0.0,
+        flash_attn=True,
+        mask_estimator_depth=2,
+        mlp_expansion_factor=4,
+        skip_connection=False,
+        sage_attention=False,
+        spk_embd_dim=192,
     ):
         super().__init__()
 
@@ -69,10 +73,21 @@ class BDCSGBSRoformerExportable(Module):
 
         self.layers = ModuleList([])
         for _ in range(depth):
-            self.layers.append(nn.ModuleList([
-                ScaleTransformer(depth=1, rotary_embed=time_rotary_embed, drop_prob=0., **transformer_kwargs),
-                ScaleTransformer(depth=1, rotary_embed=freq_rotary_embed, **transformer_kwargs),
-            ]))
+            self.layers.append(
+                nn.ModuleList(
+                    [
+                        ScaleTransformer(
+                            depth=1,
+                            rotary_embed=time_rotary_embed,
+                            drop_prob=0.0,
+                            **transformer_kwargs,
+                        ),
+                        ScaleTransformer(
+                            depth=1, rotary_embed=freq_rotary_embed, **transformer_kwargs
+                        ),
+                    ]
+                )
+            )
 
         self.final_norm = RMSNorm(dim)
 
@@ -80,11 +95,17 @@ class BDCSGBSRoformerExportable(Module):
 
         self.band_split = BandSplit(dim=dim, dim_inputs=freqs_per_bands_with_complex)
 
-        self.mask_estimators = nn.ModuleList([
-            MaskEstimator(dim=dim, dim_inputs=freqs_per_bands_with_complex, 
-                         depth=mask_estimator_depth, mlp_expansion_factor=mlp_expansion_factor)
-            for _ in range(3)
-        ])
+        self.mask_estimators = nn.ModuleList(
+            [
+                MaskEstimator(
+                    dim=dim,
+                    dim_inputs=freqs_per_bands_with_complex,
+                    depth=mask_estimator_depth,
+                    mlp_expansion_factor=mlp_expansion_factor,
+                )
+                for _ in range(3)
+            ]
+        )
 
         self.spk_embd_to_dim = nn.Linear(spk_embd_dim, dim)
         self.band_cond_embedding = BandEmbedder(len(freqs_per_bands), dim, dim)
@@ -92,7 +113,7 @@ class BDCSGBSRoformerExportable(Module):
         self.register_buffer(
             "band_indices",
             torch.arange(len(self.freqs_per_bands), dtype=torch.long),
-            persistent=False
+            persistent=False,
         )
 
     def _complex_mul(self, stft_repr: Tensor, mask: Tensor) -> Tensor:
@@ -104,15 +125,15 @@ class BDCSGBSRoformerExportable(Module):
         return torch.stack([res_real, res_imag], dim=-1)
 
     def forward(
-            self,
-            stft_repr: Tensor,
-            speaker_embedding: Tensor,
+        self,
+        stft_repr: Tensor,
+        speaker_embedding: Tensor,
     ) -> Tensor:
         """
         Args:
             stft_repr: (batch, freq_bins*2, time_frames, 2) - STFT as real tensor
             speaker_embedding: (batch, spk_embd_dim)
-        
+
         Returns:
             result: (batch, 3, freq_bins*2, time_frames, 2) - masked STFT for 3 stems
         """
@@ -136,7 +157,7 @@ class BDCSGBSRoformerExportable(Module):
 
         # Speaker conditioning
         spk_emb = self.spk_embd_to_dim(speaker_embedding)
-        # 预计算 freq transformer 的 speaker conditioning: (b, d) -> (b*t, d)
+        # Precompute speaker conditioning for the frequency transformer: (b, d) -> (b*t, d)
         spk_f_cond = spk_emb.unsqueeze(1).expand(b, t, -1).reshape(b * t, -1)
 
         store = [None] * len(self.layers)
@@ -146,17 +167,17 @@ class BDCSGBSRoformerExportable(Module):
                     x = x + store[j]
 
             # Time transformer: (b, t, f, d) -> (b*f, t, d)
-            # 合并 permute + reshape: (b, t, f, d) -> (b, f, t, d) -> (b*f, t, d)
+            # Combine permute and reshape: (b, t, f, d) -> (b, f, t, d) -> (b*f, t, d)
             x = x.permute(0, 2, 1, 3).reshape(b * f, t, d)
             x = time_transformer(x, band_embedding)
-            
+
             # Freq transformer: (b*f, t, d) -> (b*t, f, d)
-            # 原始: view(b,f,t,d) -> permute(0,2,1,3) -> reshape(b*t,f,d)
-            # 优化: (b*f, t, d) -> (b, f, t, d) -> transpose(1,2) -> (b*t, f, d)
+            # Original: view(b,f,t,d) -> permute(0,2,1,3) -> reshape(b*t,f,d)
+            # Optimized: (b*f, t, d) -> (b, f, t, d) -> transpose(1,2) -> (b*t, f, d)
             x = x.view(b, f, t, d).transpose(1, 2).reshape(b * t, f, d)
             x = freq_transformer(x, spk_f_cond)
-            
-            # 恢复: (b*t, f, d) -> (b, t, f, d)
+
+            # Restore: (b*t, f, d) -> (b, t, f, d)
             x = x.view(b, t, f, d)
 
             if self.skip_connection:
@@ -169,7 +190,7 @@ class BDCSGBSRoformerExportable(Module):
         mask = torch.stack(masks, dim=1)  # (b, 3, t, f*c)
 
         # (b, 3, t, f_total) -> (b, 3, f*2, t, 2)
-        # 合并 view + permute
+        # Combine view and permute
         mask = mask.view(batch, 3, t_stft, freq_bins_stereo, 2).permute(0, 1, 3, 2, 4)
 
         # Apply mask: (b, 1, f*2, t, 2) * (b, 3, f*2, t, 2)
@@ -177,7 +198,6 @@ class BDCSGBSRoformerExportable(Module):
         result = self._complex_mul(stft_repr, mask)
 
         return result
-
 
 
 class SpeakerBSRoformerExportable(Module):
@@ -188,21 +208,21 @@ class SpeakerBSRoformerExportable(Module):
 
     @beartype
     def __init__(
-            self,
-            dim,
-            *,
-            depth,
-            freqs_per_bands: Tuple[int, ...] = DEFAULT_FREQS_PER_BANDS,
-            dim_head=64,
-            heads=8,
-            attn_dropout=0.,
-            ff_dropout=0.,
-            flash_attn=True,
-            mask_estimator_depth=2,
-            mlp_expansion_factor=4,
-            skip_connection=False,
-            sage_attention=False,
-            spk_embd_dim=192,
+        self,
+        dim,
+        *,
+        depth,
+        freqs_per_bands: Tuple[int, ...] = DEFAULT_FREQS_PER_BANDS,
+        dim_head=64,
+        heads=8,
+        attn_dropout=0.0,
+        ff_dropout=0.0,
+        flash_attn=True,
+        mask_estimator_depth=2,
+        mlp_expansion_factor=4,
+        skip_connection=False,
+        sage_attention=False,
+        spk_embd_dim=192,
     ):
         super().__init__()
 
@@ -229,10 +249,18 @@ class SpeakerBSRoformerExportable(Module):
 
         self.layers = ModuleList([])
         for _ in range(depth):
-            self.layers.append(nn.ModuleList([
-                ScaleTransformer(depth=1, rotary_embed=time_rotary_embed, **transformer_kwargs),
-                ScaleTransformer(depth=1, rotary_embed=freq_rotary_embed, **transformer_kwargs),
-            ]))
+            self.layers.append(
+                nn.ModuleList(
+                    [
+                        ScaleTransformer(
+                            depth=1, rotary_embed=time_rotary_embed, **transformer_kwargs
+                        ),
+                        ScaleTransformer(
+                            depth=1, rotary_embed=freq_rotary_embed, **transformer_kwargs
+                        ),
+                    ]
+                )
+            )
 
         self.final_norm = RMSNorm(dim)
 
@@ -240,11 +268,17 @@ class SpeakerBSRoformerExportable(Module):
 
         self.band_split = BandSplit(dim=dim, dim_inputs=freqs_per_bands_with_complex)
 
-        self.mask_estimators = nn.ModuleList([
-            MaskEstimator(dim=dim, dim_inputs=freqs_per_bands_with_complex, 
-                         depth=mask_estimator_depth, mlp_expansion_factor=mlp_expansion_factor)
-            for _ in range(3)
-        ])
+        self.mask_estimators = nn.ModuleList(
+            [
+                MaskEstimator(
+                    dim=dim,
+                    dim_inputs=freqs_per_bands_with_complex,
+                    depth=mask_estimator_depth,
+                    mlp_expansion_factor=mlp_expansion_factor,
+                )
+                for _ in range(3)
+            ]
+        )
 
         self.spk_embd_to_dim = nn.Linear(spk_embd_dim, dim)
 
@@ -257,15 +291,15 @@ class SpeakerBSRoformerExportable(Module):
         return torch.stack([res_real, res_imag], dim=-1)
 
     def forward(
-            self,
-            stft_repr: Tensor,
-            speaker_embedding: Tensor,
+        self,
+        stft_repr: Tensor,
+        speaker_embedding: Tensor,
     ) -> Tensor:
         """
         Args:
             stft_repr: (batch, freq_bins*2, time_frames, 2) - STFT as real tensor
             speaker_embedding: (batch, spk_embd_dim)
-        
+
         Returns:
             result: (batch, 3, freq_bins*2, time_frames, 2) - masked STFT for 3 stems
         """
@@ -284,10 +318,10 @@ class SpeakerBSRoformerExportable(Module):
 
         # Speaker conditioning: project to model dimension
         spk_emb = self.spk_embd_to_dim(speaker_embedding)  # (b, d)
-        
+
         # Prepare speaker conditioning for time transformer: (b, d) -> (b*f, d)
         spk_t_cond = spk_emb.unsqueeze(1).expand(b, f, -1).reshape(b * f, -1)
-        
+
         # Prepare speaker conditioning for freq transformer: (b, d) -> (b*t, d)
         spk_f_cond = spk_emb.unsqueeze(1).expand(b, t, -1).reshape(b * t, -1)
 
@@ -300,11 +334,11 @@ class SpeakerBSRoformerExportable(Module):
             # Time transformer: (b, t, f, d) -> (b*f, t, d)
             x = x.permute(0, 2, 1, 3).reshape(b * f, t, d)
             x = time_transformer(x, spk_t_cond)
-            
+
             # Freq transformer: (b*f, t, d) -> (b*t, f, d)
             x = x.view(b, f, t, d).transpose(1, 2).reshape(b * t, f, d)
             x = freq_transformer(x, spk_f_cond)
-            
+
             # Restore: (b*t, f, d) -> (b, t, f, d)
             x = x.view(b, t, f, d)
 
@@ -325,4 +359,3 @@ class SpeakerBSRoformerExportable(Module):
         result = self._complex_mul(stft_repr, mask)
 
         return result
-

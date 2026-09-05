@@ -7,7 +7,10 @@ import argparse
 import csv
 import sys
 from pathlib import Path
-from typing import Iterable
+from typing import TYPE_CHECKING, Iterable
+
+if TYPE_CHECKING:
+    import soundfile as sf
 
 
 class Reporter:
@@ -138,8 +141,7 @@ def check_aligned(infos: list[tuple[Path, sf.SoundFile]], reporter: Reporter) ->
     for path, info in infos[1:]:
         if info.frames != reference.frames:
             reporter.error(
-                f"unaligned frame counts: {reference_path}={reference.frames}, "
-                f"{path}={info.frames}"
+                f"unaligned frame counts: {reference_path}={reference.frames}, {path}={info.frames}"
             )
 
 
@@ -167,9 +169,7 @@ def check_track_layout(
             for instrument in instruments:
                 stem_path = find_stem(track_dir, instrument)
                 if stem_path is None:
-                    reporter.error(
-                        f"missing {instrument}.wav|flac in training track: {track_dir}"
-                    )
+                    reporter.error(f"missing {instrument}.wav|flac in training track: {track_dir}")
                     continue
                 info = check_audio(stem_path, expected_rate, reporter)
                 if info is not None:
@@ -273,7 +273,9 @@ def check_validation(
             if mixture_info is not None:
                 infos.append((mixture, mixture_info))
             for instrument in instruments:
-                filename = "vocals.wav" if instrument == "other" and other_fix else f"{instrument}.wav"
+                filename = (
+                    "vocals.wav" if instrument == "other" and other_fix else f"{instrument}.wav"
+                )
                 path = track_dir / filename
                 info = check_audio(path, expected_rate, reporter)
                 if info is not None:
@@ -306,13 +308,9 @@ def main() -> int:
             reporter=reporter,
         )
     elif args.dataset_type == 2:
-        check_pool_layout(
-            args.data_path, instruments, sample_rate, args.max_tracks, reporter
-        )
+        check_pool_layout(args.data_path, instruments, sample_rate, args.max_tracks, reporter)
     else:
-        check_csv_layout(
-            args.data_path, instruments, sample_rate, args.max_tracks, reporter
-        )
+        check_csv_layout(args.data_path, instruments, sample_rate, args.max_tracks, reporter)
 
     check_validation(
         args.valid_path,

@@ -2,4 +2,4 @@
 Template Diffusion Model Package
 """
 
-__all__ = ['']
+__all__ = [""]
