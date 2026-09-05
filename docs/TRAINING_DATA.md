@@ -86,11 +86,56 @@ dtype = float32 (recommended)
 ```
 
 During training, the loader randomly selects up to 20 rows and averages them. During
-validation, it averages all rows. The embeddings should be generated from clean vocal
-segments belonging to the target speaker for that track. This repository does not
-include a verified end-to-end embedding-generation workflow. Use a trusted CAMPPlus
-extraction environment and manually check speaker identity on a small sample before
-preparing the full dataset.
+validation, it averages all rows. Generate these features from clean vocal segments
+belonging to the target speaker, not from the mixture, backing vocals, or instrumental.
+Run the batch extractor from the repository root after installing the main runtime
+dependencies:
+
+```bash
+python -m scripts.extract_speaker_embeddings \
+  --data-path /absolute/path/to/train /absolute/path/to/valid \
+  --device cuda:0
+```
+
+Each supplied root must contain immediate track subdirectories. For each track,
+the script reads `vocals.wav` or `vocals.flac` and writes `embeddings.npy` alongside
+the audio. Use `--vocal-stem lead_vocals` for a different target stem name. Duplicate
+WAV/FLAC candidates are rejected instead of silently choosing one.
+
+The extractor loads the frozen, pretrained 192-dimensional CAM++ encoder once for
+all roots. By default, it uses the pinned, checksum-verified official model cache
+under `checkpoints/campp`. For offline extraction, pass
+`--model-dir /absolute/path/to/campp`, containing `configuration.json` and
+`campplus_cn_en_common.pt`. Use `--device cpu` when CUDA is unavailable; the default
+`--device auto` selects CUDA when available, otherwise CPU.
+
+Stereo vocals are averaged to mono and resampled to 16 kHz in memory; original
+audio is not modified. Default extraction settings are 2-second windows, RMS
+threshold 0.001, at most 64 uniformly sampled active windows, and batches of 8.
+Active tails of at least 0.1 seconds are repeated to the window length. The output
+contains individual, unnormalized float32 segment vectors, not just their mean.
+`--max-segments`, `--segment-duration`, `--energy-threshold`, and `--batch-size`
+control these limits.
+
+`--max-clusters 1` is the default for clean, single-target vocals and retains all
+selected active segments. For vocals containing other singers, `--max-clusters 3`
+keeps only vectors assigned to the largest spectral cluster. The largest cluster
+is not guaranteed to identify the intended singer; manually check target identity
+on a small sample before preparing the full dataset.
+
+Existing valid embeddings are checked and skipped, allowing interrupted runs to
+resume. Their source/model provenance is not verified: use `--overwrite` after
+changing the vocal audio, encoder, or extraction settings. Invalid existing files
+are reported as errors and preserved unless `--overwrite` is supplied. Replacement
+is atomic and happens only after a successful extraction. Silent, missing, damaged,
+or non-finite vocals never create all-zero placeholder embeddings.
+
+The script continues after individual track failures and exits with a nonzero
+status if any track failed. A per-track JSON report is written to
+`results/speaker_embeddings/report.json` (overwritten on each run); use `--report`
+to choose another JSON path outside track directories. Resolve failures and run
+the dataset validator below before launching training. This script prepares
+features only; it does not start separation or auxiliary-model training.
 
 ## 4. Other training layouts
 

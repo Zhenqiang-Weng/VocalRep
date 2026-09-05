@@ -160,6 +160,22 @@ outputs, and downloaded models are ignored by Git. See
 
 ## Training
 
+Prepare CAM++ speaker features for both the aligned training and validation sets:
+
+```bash
+python -m scripts.extract_speaker_embeddings \
+  --data-path /path/to/train /path/to/valid \
+  --device cuda:0
+```
+
+The extractor reads `<root>/<track>/vocals.wav` or `vocals.flac` and saves
+float32 `(N, 192)` arrays to `<root>/<track>/embeddings.npy`. It uses the pretrained
+CAM++ model, skips valid existing arrays, and reports missing/silent vocals as
+errors. Use `--device cpu` for CPU extraction, `--model-dir /path/to/campp` for an
+offline encoder, or `--overwrite` to regenerate existing features. See the
+[speaker embedding guide](docs/TRAINING_DATA.md#speaker-embeddings) for segmentation,
+optional dominant-speaker filtering, and failure reports.
+
 Training uses Hugging Face Accelerate. After installing the training
 dependencies, configure Accelerate for the local machine:
 

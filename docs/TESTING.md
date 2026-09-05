@@ -63,7 +63,7 @@ and 4 heads. These are small execution checks, not trained production models.
 
 ## Automated regression checks
 
-`python -m pytest -q` passed 37 tests, covering:
+`python -m pytest -q` passed 55 tests, covering:
 
 - Mel, HiFi-GAN, and music discriminator updates, differentiable feature
   matching, reference/parameter gradient isolation, and checkpoint reloads.
@@ -73,8 +73,41 @@ and 4 heads. These are small execution checks, not trained production models.
 - CAM++ short/stereo/silent segment handling, bounded inference batches,
   separation boundaries across chunk batch sizes, FLAC subtypes, resampling,
   reversible normalization, and empty-input errors.
+- Batch extraction for training and validation: resampling, segment-row output,
+  one-time encoder loading, optional cluster selection, validated skips, explicit
+  replacement, atomic non-clobbering writes, and failure exit statuses.
 
 Additional checks: Ruff lint/format, Python compilation, English-comment scan,
 shell syntax, and both auxiliary-training CLI help commands. CI runs static
 checks and CPU regression tests without downloading checkpoints or demo audio.
 Multi-GPU training, full training convergence, and TensorRT export were not tested.
+
+## Training embedding extraction
+
+The new batch extractor was also run with the real pretrained CAM++ model on
+CUDA, using copies of the Boy Friend vocal stem in separate train/validation
+fixture roots:
+
+```bash
+python -m scripts.extract_speaker_embeddings \
+  --data-path test_sample/speaker_embeddings/train test_sample/speaker_embeddings/valid \
+  --device cuda:0 \
+  --report results/speaker_embeddings/demo_report.json
+
+python scripts/validate_training_data.py \
+  --config-path ckpts/multi_stem/config.yaml \
+  --dataset-type 4 \
+  --data-path test_sample/speaker_embeddings/train \
+  --valid-path test_sample/speaker_embeddings/valid \
+  --require-embeddings
+```
+
+Both tracks produced float32 `(10, 192)` arrays with finite, nonzero vectors.
+The complete data validator checked two tracks and seven audio files and passed
+with zero warnings. The actual `MSSDatasetWithSpk` and speaker-conditioned
+`MSSValidationDataset` both loaded the generated arrays and returned the expected
+192-dimensional mean vectors. A second extraction skipped both valid files
+without loading the encoder. Copies in both splits are used only to test directory and
+loader compatibility, not to assess generalization; production training and
+validation tracks must be disjoint. Fixtures, embeddings, and JSON reports stay
+local and are excluded from Git.
