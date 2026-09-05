@@ -1,59 +1,158 @@
-# Python bytecode and caches
+# Python bytecode, compiled extensions, and tool caches
 __pycache__/
 *.py[cod]
 *$py.class
+*.so
+*.pyd
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+.pyre/
+.pytype/
+.hypothesis/
+.tox/
+.nox/
+.ipynb_checkpoints/
+.numba_cache/
+*.nbc
+*.nbi
+
+# Test coverage reports
 .coverage
+.coverage.*
+coverage.xml
+coverage.json
 htmlcov/
+
+# Python packaging and build outputs
+build/
+dist/
+.eggs/
+*.egg-info/
+*.egg
+*.whl
+pip-wheel-metadata/
+__pypackages__/
 
 # Virtual environments and local environment files
 .venv/
+.venv-*/
 venv/
 env/
+ENV/
+.direnv/
 .env
 .env.*
 !.env.example
+!.env.sample
+!.env.template
+!.env.*.example
+.netrc
+.pypirc
+*.pem
+*.key
+*.p12
+*.pfx
 
 # Editors and operating systems
 .vscode/
 .idea/
 .DS_Store
+._*
 Thumbs.db
+ehthumbs.db
+Desktop.ini
 
-# Audio data and datasets
-*.wav
-*.mp3
-*.flac
+# Audio assets, including upper-case dataset extensions
+*.[wW][aA][vV]
+*.[wW][aA][vV][eE]
+*.[mM][pP]3
+*.[fF][lL][aA][cC]
+*.[oO][gG][gG]
+*.[oO][pP][uU][sS]
+*.[mM]4[aA]
+*.[aA][aA][cC]
+*.[aA][iI][fF]
+*.[aA][iI][fF][fF]
+*.[wW][mM][aA]
+*.[pP][cC][mM]
+
+# Dataset roots must stay anchored: discriminator/data contains Python source.
 /data/
 /dataset/
-
-# Training and experiment outputs
-/logs/
-*.log
-/results/
-/wandb/
-/runs/
-/checkpoints/
+/datasets/
 /test_sample/
-/musdb_eval_results/
+/mss_api/data/
+/mss_api/dataset/
+/mss_api/datasets/
+/mss_api/test_sample/
+
+# Generated speaker vectors, spectrograms, and serialized dataset caches
+*.npy
+*.npz
+*.pkl
+*.pickle
+
+# Local model/download/compiler caches, including redirected cache homes
+.cache/
+.torch/
+.huggingface/
+.modelscope/
+.triton/
+.nv/
+
+# Training and inference outputs, including runs launched from mss_api
+logs/
+*.log
+*.log.*
+results/
+outputs/
+wandb/
+runs/
+lightning_logs/
+mlruns/
+tensorboard/
+events.out.tfevents.*
+checkpoint/
+checkpoints/
+last_ckpt/
+last_discriminator_ckpt/
+musdb_eval_results/
+nohup.out
+slurm-*.out
 
 # New model binaries require an explicit, reviewed Git LFS add. Existing
-# tracked checkpoints remain tracked even when these patterns are present.
+# tracked checkpoints remain tracked; do not ignore ckpts/ or models/ because
+# they also contain versioned configurations and Python model definitions.
 *.ckpt
 *.pt
 *.pth
 *.safetensors
+pytorch_model*.bin
+diffusion_pytorch_model*.bin
 
 # Generated export artifacts
+exported/
+exported_spk/
 *.engine
 *.onnx
+*.onnx.data
+*.onnx_data
 *.trt
-/exported_spk/
+*.plan
+*.ort
+*.timing.cache
 
-# Temporary files
+# Temporary files, partial downloads, and local process state
+/tmp/
+/temp/
 *.tmp
+*.temp
+*.part
+*.partial
+*.download
 *.swp
 *.swo
+*.pid
+*.pid.lock
 *~
