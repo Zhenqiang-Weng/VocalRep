@@ -32,14 +32,18 @@ dist/
 *.egg
 *.whl
 pip-wheel-metadata/
+pip-log.txt
+.pip-cache/
 __pypackages__/
 
-# Virtual environments and local environment files
+# Virtual environments, conda metadata, and local secrets/credentials
 .venv/
 .venv-*/
 venv/
 env/
 ENV/
+.conda/
+conda-meta/
 .direnv/
 .env
 .env.*
@@ -49,21 +53,39 @@ ENV/
 !.env.*.example
 .netrc
 .pypirc
+.hf_token
+.wandb/
+secrets.yaml
+secrets.yml
+secrets.json
+credentials.json
 *.pem
 *.key
 *.p12
 *.pfx
+*.jks
 
-# Editors and operating systems
+# Editors, AI assistants, and operating systems
 .vscode/
 .idea/
+*.sublime-project
+*.sublime-workspace
+.cursor/
+.claude/
+.codex/
+.gemini/
 .DS_Store
 ._*
+.AppleDouble
+.LSOverride
+.Spotlight-V100
+.Trash-*
 Thumbs.db
 ehthumbs.db
 Desktop.ini
+$RECYCLE.BIN/
 
-# Audio assets, including upper-case dataset extensions
+# Audio and video media assets (case-insensitive extensions)
 *.[wW][aA][vV]
 *.[wW][aA][vV][eE]
 *.[mM][pP]3
@@ -76,57 +98,110 @@ Desktop.ini
 *.[aA][iI][fF][fF]
 *.[wW][mM][aA]
 *.[pP][cC][mM]
+*.[mM][pP]4
+*.[mM][kK][vV]
+*.[mM][oO][vV]
+*.[aA][vV][iI]
+*.[wW][eE][bB][mM]
 
-# Dataset roots must stay anchored: discriminator/data contains Python source.
+# Dataset, evaluation, and sample roots (anchored so source dirs like
+# discriminator/data/ remain visible)
 /data/
 /dataset/
 /datasets/
+/train/
+/valid/
+/val/
+/eval/
+/samples/
+/demo/
+/demos/
+/audio/
+/stems/
+/separated/
 /test_sample/
+/inference_results/
+/eval_results/
 /mss_api/data/
 /mss_api/dataset/
 /mss_api/datasets/
 /mss_api/test_sample/
 
-# Generated speaker vectors, spectrograms, and serialized dataset caches
+# Generated speaker vectors, spectrograms, binary dataset stores, and archives
 *.npy
 *.npz
 *.pkl
 *.pickle
+*.h5
+*.hdf5
+*.lmdb
+*.parquet
+*.arrow
+*.feather
+*.memmap
+*.mmap
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.tar.bz2
+*.tar.xz
+*.7z
+*.rar
 
 # Local model/download/compiler caches, including redirected cache homes
 .cache/
 .torch/
+.torchinductor/
+torchinductor_*/
+.accelerate/
 .huggingface/
 .modelscope/
 .triton/
+triton_cache/
 .nv/
 
-# Training and inference outputs, including runs launched from mss_api
+# Training, evaluation, profiling, and inference outputs
 logs/
 *.log
 *.log.*
+*.err
 results/
+output/
 outputs/
 wandb/
 runs/
 lightning_logs/
+tb_logs/
+tblogs/
 mlruns/
 tensorboard/
 events.out.tfevents.*
 checkpoint/
 checkpoints/
 last_ckpt/
+last_checkpoint/
+last_model_ckpt/
 last_discriminator_ckpt/
 last_additional_model_ckpt/
+weights/
+pretrained/
+pretrained_models/
+model_cache/
 musdb_eval_results/
 model_structure_and_precision.txt
 nohup.out
 slurm-*.out
+slurm-*.err
 torch_compile_debug/
 profiler/
 *.prof
 *.nsys-rep
 *.ncu-rep
+*.qdrep
+*.sqlite
+*.sqlite3
+*.trace.json
 
 # Downloaded third-party speaker checkpoint repositories
 **/speech_campplus_*/
@@ -139,6 +214,13 @@ mss_api/ckpt/
 *.pt
 *.pth
 *.safetensors
+*.weights
+*.torchscript
+*.mar
+*.pb
+*.tflite
+*.mlmodel
+*.mlpackage/
 pytorch_model*.bin
 diffusion_pytorch_model*.bin
 
@@ -154,11 +236,16 @@ exported_spk/
 *.ort
 *.timing.cache
 
-# Temporary files, partial downloads, and local process state
+# Temporary files, backups, partial downloads, and local process state
 /tmp/
 /temp/
 *.tmp
 *.temp
+*.bak
+*.orig
+*.rej
+*.dmp
+*.dump
 *.part
 *.partial
 *.download

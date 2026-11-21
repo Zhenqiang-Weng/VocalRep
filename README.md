@@ -6,23 +6,56 @@ Official PyTorch implementation of **VocalRep: Structure-Aware Vocal Representat
 
 VocalRep is a structure-aware learning framework for disentangling **lead vocals, backing harmonies, and instrumental components** while maintaining role consistency across long-form audio. The framework combines global vocal identity conditioning with ranking-based objectives to obtain temporally stable and semantically unambiguous vocal representations for downstream multimodal generation tasks, including singing voice conversion and audio-driven lip synchronization.
 
-This repository contains the source-separation models, training and inference utilities, and experimental components associated with VocalRep. Supported separation backbones include BS-Roformer, Mel-Band Roformer, SCNet, and BandIt v2.
+This repository contains the source-separation models, Accelerate training runtime, speaker-guided inference pipeline, and auxiliary discriminator/diffusion components associated with VocalRep. Supported separation backbones include BS-Roformer, Mel-Band Roformer, SCNet, and BandIt v2.
 
 > [!IMPORTANT]
 > This repository is still being organized as an experimental research codebase.
-> The basic inference pipeline and several model implementations are available,
-> while some training entry points, speaker-model assets, and legacy
-> discriminator components are still undergoing end-to-end validation.
-> Additional code, checkpoints, and documentation will be released progressively.
+> The basic inference pipeline, speaker embedding extractor, and unified
+> Accelerate training runtime are available, while some experimental backbones,
+> TensorRT export utilities, and auxiliary training configurations remain under
+> active validation. See [`NOTICE.md`](NOTICE.md) for rights, usage boundaries,
+> and third-party attributions.
+
+## Repository layout
+
+```text
+VocalRep/
+├── ckpts/multi_stem/                         # Original Git LFS checkpoint and config.yaml
+├── models/
+│   ├── bs_roformer/                          # BS-Roformer, Mel-Band Roformer, exportable variants, SDPA/Sage attention
+│   ├── bandit_v2/                            # BandIt v2 separation backbone
+│   ├── scnet/                                # SCNet separation backbones
+│   └── preprocess/                           # BF16-safe STFT/iSTFT and multi-resolution STFT loss
+├── spk_extract/                              # Pretrained CAM++ loader, clustering, and ONNX/TRT export helper
+├── discriminator/                            # Mel, HiFi-GAN wave, and music GAN discriminators
+├── diffusion/                                # Flow-matching DiT/Transformer/MLP enhancement modules
+├── utils/
+│   ├── train_utils.py                        # Shared Accelerate training, validation, checkpointing, and VRAM/speed runtime
+│   ├── training_cli.py                       # Unified training CLI argument parser
+│   ├── dataset.py / dataset_with_spk.py      # Multi-layout audio and speaker-conditioned datasets
+│   └── model_utils.py / settings.py / ...    # Batched demixing, optimizer builders, metrics, losses, RMVPE
+├── mss_api/                                  # Inference wrapper and TensorRT export scripts (reusing root modules)
+├── scripts/                                  # Speaker embedding extraction, data validation, static checks, utilities
+├── tests/                                    # CPU regression tests and .gitignore verification
+├── docs/                                     # Data prep, auxiliary training, and validation documentation
+├── train_accelerate_bf16.py                  # Speaker-guided Accelerate training entry point
+├── train_accelerate_bf16_with_discriminator.py # Speaker-guided + GAN discriminator training entry point
+├── train_accelerate_discriminator_diffusion.py # General separator + discriminator + diffusion training entry point
+├── train_accelerate.sh                       # Validated multi-GPU Accelerate training launcher
+├── inference_with_spk.py / infer_with_spk.sh # Two-pass blind + speaker-guided inference entry points
+├── NOTICE.md                                 # Rights reservation, responsibilities, disclaimer, third-party notices
+├── SECURITY.md                               # Vulnerability reporting and safe checkpoint/credential guidelines
+└── CONTRIBUTING.md                           # Contribution workflow, roles, and code/LFS governance
+```
 
 ## Environment setup
 
 Recommended environment:
 
 - Linux or WSL2
-- Python 3.10
-- An NVIDIA GPU (a CPU is sufficient for basic checks, but inference with
-  large models will be slow)
+- Python 3.10+
+- An NVIDIA GPU (a CPU is sufficient for basic checks, but inference and
+  training with large models will be slow)
 - FFmpeg and Git LFS
 
 Create and activate the environment:
@@ -145,6 +178,11 @@ their output files, without deleting the embedding directory. Empty input,
 invalid checkpoints, non-finite audio, and missing active vocal segments are
 reported as errors. Silent vocals do not produce a fabricated speaker identity.
 
+For programmatic API usage or ONNX/TensorRT export helpers, see
+[`mss_api/inference_wrapper.py`](mss_api/inference_wrapper.py),
+[`mss_api/export_to_tensorrt.py`](mss_api/export_to_tensorrt.py), and
+[`spk_extract/campplus_exportable.py`](spk_extract/campplus_exportable.py).
+
 ## Reproducible three-stem test
 
 ```bash
@@ -156,9 +194,11 @@ This downloads the project's public Boy Friend demo, verifies asset checksums,
 and runs both separation passes. It validates stereo output lengths, sample
 rates, finite non-silent stems, and the pretrained embedding. Audio, generated
 outputs, and downloaded models are ignored by Git. See
-[the test record](docs/TESTING.md) for measured results and scope.
+[the validation record](docs/TESTING.md) for measured results and scope.
 
 ## Training
+
+### 1. Prepare speaker embeddings and validate datasets
 
 Prepare CAM++ speaker features for both the aligned training and validation sets:
 
@@ -173,34 +213,49 @@ float32 `(N, 192)` arrays to `<root>/<track>/embeddings.npy`. It uses the pretra
 CAM++ model, skips valid existing arrays, and reports missing/silent vocals as
 errors. Use `--device cpu` for CPU extraction, `--model-dir /path/to/campp` for an
 offline encoder, or `--overwrite` to regenerate existing features. See the
-[speaker embedding guide](docs/TRAINING_DATA.md#speaker-embeddings) for segmentation,
-optional dominant-speaker filtering, and failure reports.
+[training data preparation guide](docs/TRAINING_DATA.md) for dataset layouts,
+speaker embedding options, and the pre-training validation checklist.
 
-Training uses Hugging Face Accelerate. After installing the training
-dependencies, configure Accelerate for the local machine:
+### 2. Configure and launch Accelerate training
+
+Training uses Hugging Face Accelerate. After installing `requirements-train.txt`,
+configure Accelerate for the local machine:
 
 ```bash
 accelerate config
 ```
 
-Fill in the model, configuration, training data, validation data, output
-directory, and GPU settings near the top of
-[`train_accelerate.sh`](train_accelerate.sh), then run the script. See the
-English [training data preparation guide](docs/TRAINING_DATA.md) for dataset
-layouts and the validation checklist.
+Edit the paths, model selection, and runtime flags near the top of
+[`train_accelerate.sh`](train_accelerate.sh) and launch training with
+`bash train_accelerate.sh`. Available entry points:
 
-All Accelerate training entry points share [`utils/train_utils.py`](utils/train_utils.py)
-and expose speed/VRAM controls including `--gradient-checkpointing`,
-`--gradient-accumulation-steps`, `--compile` (`--compile-mode`), `--allow-tf32`,
-`--persistent-workers`, `--prefetch-factor`, `--log-interval`, `--valid-every`,
-and `--skip-valid`. On CUDA GPUs, fused `Adam`/`AdamW`, TF32 matmul, cached
-STFT windows, and BF16-safe FP32 FFT/iSTFT are enabled automatically.
+- [`train_accelerate_bf16.py`](train_accelerate_bf16.py) — speaker-guided separation (supports exportable and standard Roformers).
+- [`train_accelerate_bf16_with_discriminator.py`](train_accelerate_bf16_with_discriminator.py) — speaker-guided separation with per-stem GAN discriminators.
+- [`train_accelerate_discriminator_diffusion.py`](train_accelerate_discriminator_diffusion.py) — general separator with optional discriminator and flow-matching diffusion enhancement.
+
+### 3. Speed and VRAM optimization controls
+
+All three Accelerate entry points share [`utils/train_utils.py`](utils/train_utils.py)
+and [`utils/training_cli.py`](utils/training_cli.py), providing:
+
+| Option / `train_accelerate.sh` knob | Purpose |
+| --- | --- |
+| `--gradient-checkpointing` / `GRADIENT_CHECKPOINTING` | Enable or disable activation checkpointing across Roformer layers (including exportable variants during training only) to lower peak VRAM |
+| `--gradient-accumulation-steps` / `GRADIENT_ACCUMULATION_STEPS` | Micro-step gradient accumulation (kept at `1` when auxiliary discriminator/diffusion wrappers manage their own `grad_acc_step`) |
+| `--compile` (`--compile-mode`) / `COMPILE_MODEL` | Optional `torch.compile` acceleration (`default`, `reduce-overhead`, `max-autotune`) |
+| `--allow-tf32` / `ALLOW_TF32` | Enable TF32 matmul/cuDNN on Ampere+ GPUs (automatically disabled under `--deterministic`) |
+| `--persistent-workers`, `--prefetch-factor` | Keep DataLoader workers warm across epochs and prefetch batches |
+| `--log-interval`, `--valid-every`, `--skip-valid`, `--empty-cache-interval` | Reduce host-GPU synchronization overhead and control validation / cache-clear cadence |
+
+On CUDA GPUs, fused `Adam`/`AdamW`, `zero_grad(set_to_none=True)`, cached STFT
+windows, BF16-safe FP32 FFT/iSTFT, CPU-accumulated batched validation, and
+micro-step diffusion backpropagation are enabled automatically while keeping
+existing checkpoint `state_dict` keys unchanged.
 
 Before launching a multi-GPU job, first use one GPU and a small dataset to
-verify data loading and one forward/backward pass.
-
-See [auxiliary model training](docs/AUXILIARY_MODELS.md) for discriminator and
-diffusion configuration, loss ownership, checkpoint compatibility, and tests.
+verify data loading and one forward/backward pass. See
+[auxiliary model training](docs/AUXILIARY_MODELS.md) for discriminator and
+diffusion configuration, loss ownership, and checkpoint compatibility.
 
 ## Development checks
 
@@ -214,15 +269,27 @@ python -m compileall -q -x '/(\.venv|checkpoints|test_sample|results)/' .
 bash -n train_accelerate.sh infer_with_spk.sh
 ```
 
-See [`CONTRIBUTING.md`](CONTRIBUTING.md) for contribution guidelines.
+## Rights, responsibilities, and governance
 
-## Repository status
-
-This repository is still being organized, and the author will continue to improve and supplement its contents. It is not yet ready for general use or distribution and has not been released under an open-source license. Unless an explicit license is added, all rights are reserved, and no permission is granted to use, copy, modify, or distribute any part of this repository.
+- **Repository status & rights:** This repository is still being organized, and
+  the author will continue to improve and supplement its contents. It is not yet
+  ready for general use or distribution and has not been released under an
+  open-source license. Unless an explicit license is added, all rights are
+  reserved, and no permission is granted to use, copy, modify, or distribute any
+  part of this repository.
+- **Rights, disclaimer & third-party notices:** See [`NOTICE.md`](NOTICE.md) for
+  maintainer/user/contributor responsibilities, ethical and audio copyright
+  compliance, warranty disclaimer, limitation of liability, and the full list of
+  third-party attributions.
+- **Security & safe usage:** See [`SECURITY.md`](SECURITY.md) for private
+  vulnerability reporting and checkpoint/credential safety practices.
+- **Contributing:** See [`CONTRIBUTING.md`](CONTRIBUTING.md) for contribution
+  workflow, roles, code standards, and Git LFS rules.
 
 ## Acknowledgments
 
 Parts of the training and inference structure were copied from
 [ZFTurbo/Music-Source-Separation-Training](https://github.com/ZFTurbo/Music-Source-Separation-Training).
 Third-party copyright and license notices retained in individual source files
-continue to apply.
+continue to apply; see [`NOTICE.md`](NOTICE.md) for the consolidated attribution
+summary.
