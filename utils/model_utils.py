@@ -1,4 +1,5 @@
 import argparse
+from contextlib import nullcontext
 import json
 import os
 from datetime import datetime
@@ -15,54 +16,43 @@ import torch.distributed as dist
 from spk_extract import extract_dominant_speaker_embedding_with_clusters
 
 
-def demix(
+def _resolve_autocast_dtype(config: ConfigDict, device: torch.device) -> torch.dtype:
+    """Select an autocast dtype for CUDA inference (defaults to BF16 when supported)."""
+    amp_dtype = str(getattr(getattr(config, "inference", None), "amp_dtype", "auto")).lower()
+    if amp_dtype == "bf16":
+        return torch.bfloat16
+    if amp_dtype == "fp16":
+        return torch.float16
+    if device.type == "cuda" and torch.cuda.is_bf16_supported():
+        return torch.bfloat16
+    return torch.float16
+
+
+def _demix_core(
     config: ConfigDict,
     model: torch.nn.Module,
     mix: torch.Tensor,
     device: torch.device,
     model_type: str,
+    spk_emb: Optional[torch.Tensor] = None,
     pbar: bool = False,
 ) -> Union[Dict[str, np.ndarray], np.ndarray]:
-    """
-    Perform audio source separation with a given model.
-
-    Supports both Demucs-specific and generic processing modes, including
-    overlapping chunk-based inference with optional progress bar display.
-    Handles padding, fading, and batching to reduce artifacts during separation.
-
-    Args:
-        config (ConfigDict): Configuration object with audio and inference
-            parameters (chunk size, overlap, batch size, etc.).
-        model (torch.nn.Module): Source separation model for inference.
-        mix (torch.Tensor): Input audio tensor of shape (channels, time).
-        device (torch.device): Device on which to run inference (CPU or CUDA).
-        model_type (str): Type of model (e.g., 'htdemucs', 'mdx23c') that
-            determines processing mode.
-        pbar (bool, optional): If True, show a progress bar during chunk
-            processing. Defaults to False.
-
-    Returns:
-        Union[Dict[str, np.ndarray], np.ndarray]:
-            - Dictionary mapping instrument names to separated waveforms if
-              multiple instruments are predicted.
-            - NumPy array of separated audio if only a single instrument is
-              present (Demucs mode).
-    """
-
+    """Shared overlap-add chunked separation for blind and speaker-guided models."""
     should_print = not dist.is_initialized() or dist.get_rank() == 0
 
-    mix = torch.tensor(mix, dtype=torch.float32)
+    mix = torch.as_tensor(mix, dtype=torch.float32)
+    target_device = torch.device(device)
 
-    if model_type == "htdemucs":
-        mode = "demucs"
-    else:
-        mode = "generic"
-    # Define processing parameters based on the mode
+    mode = "demucs" if model_type == "htdemucs" else "generic"
     if mode == "demucs":
         chunk_size = config.training.samplerate * config.training.segment
         num_instruments = len(config.training.instruments)
         num_overlap = config.inference.num_overlap
         step = chunk_size // num_overlap
+        border = 0
+        fade_size = 0
+        length_init = mix.shape[-1]
+        windowing_array = None
     else:
         if "chunk_size" in config.inference:
             chunk_size = config.inference.chunk_size
@@ -78,7 +68,6 @@ def demix(
         border = chunk_size - step
         length_init = mix.shape[-1]
         windowing_array = _getWindowingArray(chunk_size, fade_size)
-        # Add padding for generic mode to handle edge artifacts
         if length_init > 2 * border and border > 0:
             mix = nn.functional.pad(mix, (border, border), mode="reflect")
 
@@ -87,57 +76,83 @@ def demix(
         raise ValueError("Inference batch size must be positive.")
 
     use_amp = getattr(config.training, "use_amp", True)
+    amp_enabled = bool(use_amp and target_device.type == "cuda")
+    amp_dtype = _resolve_autocast_dtype(config, target_device) if amp_enabled else torch.float16
 
-    with torch.autocast(
-        device_type="cuda", enabled=use_amp and torch.device(device).type == "cuda"
-    ):
+    spk_emb_device = None
+    if spk_emb is not None:
+        spk_emb_device = torch.as_tensor(spk_emb, dtype=torch.float32, device=target_device)
+        if spk_emb_device.dim() == 1:
+            spk_emb_device = spk_emb_device.unsqueeze(0)
+
+    total_len = mix.shape[-1]
+
+    autocast_ctx = (
+        torch.autocast(device_type="cuda", dtype=amp_dtype) if amp_enabled else nullcontext()
+    )
+
+    with autocast_ctx:
         with torch.inference_mode():
-            # Initialize result and counter tensors
-            req_shape = (num_instruments,) + mix.shape
-            result = torch.zeros(req_shape, dtype=torch.float32)
-            counter = torch.zeros(req_shape, dtype=torch.float32)
+            result = torch.zeros((num_instruments,) + mix.shape, dtype=torch.float32)
+            # Overlap weights are identical across instruments and channels.
+            counter = torch.zeros((1, 1, total_len), dtype=torch.float32)
 
             i = 0
             batch_data = []
             batch_locations = []
-            if pbar and should_print:
-                progress_bar = tqdm(total=mix.shape[1], desc="Processing audio chunks", leave=False)
-            else:
-                progress_bar = None
+            progress_bar = (
+                tqdm(total=total_len, desc="Processing audio chunks", leave=False)
+                if (pbar and should_print)
+                else None
+            )
 
-            while i < mix.shape[1]:
-                # Extract chunk and apply padding if necessary
-                part = mix[:, i : i + chunk_size].to(device)
+            while i < total_len:
+                part = mix[:, i : i + chunk_size]
                 chunk_len = part.shape[-1]
-                if mode == "generic" and chunk_len > chunk_size // 2:
-                    pad_mode = "reflect"
-                else:
-                    pad_mode = "constant"
-                part = nn.functional.pad(part, (0, chunk_size - chunk_len), mode=pad_mode, value=0)
+                if chunk_len < chunk_size:
+                    pad_mode = (
+                        "reflect"
+                        if (mode == "generic" and chunk_len > chunk_size // 2)
+                        else "constant"
+                    )
+                    part = nn.functional.pad(
+                        part, (0, chunk_size - chunk_len), mode=pad_mode, value=0
+                    )
 
                 batch_data.append(part)
                 batch_locations.append((i, chunk_len))
                 i += step
 
-                # Process batch if it's full or the end is reached
-                if len(batch_data) >= batch_size or i >= mix.shape[1]:
-                    arr = torch.stack(batch_data, dim=0)
-                    x = model(arr)
+                if len(batch_data) >= batch_size or i >= total_len:
+                    arr = torch.stack(batch_data, dim=0).to(target_device, non_blocking=True)
+                    if spk_emb_device is not None:
+                        batch_spk = spk_emb_device.expand(arr.shape[0], -1)
+                        x = model(arr, batch_spk)
+                    else:
+                        x = model(arr)
+
+                    # Single batched host transfer avoids per-item CUDA synchronizations.
+                    x_cpu = x.float().cpu()
 
                     for j, (start, seg_len) in enumerate(batch_locations):
                         if mode == "generic":
-                            # Compute boundary fades per chunk, independently of batching.
-                            window = windowing_array.clone()
-                            if start == 0:
-                                window[:fade_size] = 1
-                            if start + seg_len >= mix.shape[1] and fade_size:
-                                window[-fade_size:] = 1
+                            at_start = start == 0
+                            at_end = start + seg_len >= total_len and fade_size > 0
+                            if at_start or at_end:
+                                window = windowing_array.clone()
+                                if at_start:
+                                    window[:fade_size] = 1.0
+                                if at_end:
+                                    window[-fade_size:] = 1.0
+                            else:
+                                window = windowing_array
+                            win_slice = window[:seg_len]
                             result[..., start : start + seg_len] += (
-                                x[j, ..., :seg_len].cpu() * window[..., :seg_len]
+                                x_cpu[j, ..., :seg_len] * win_slice
                             )
-                            counter[..., start : start + seg_len] += window[..., :seg_len]
+                            counter[..., start : start + seg_len] += win_slice
                         else:
-                            result[..., start : start + seg_len] += x[j, ..., :seg_len].cpu()
+                            result[..., start : start + seg_len] += x_cpu[j, ..., :seg_len]
                             counter[..., start : start + seg_len] += 1.0
 
                     batch_data.clear()
@@ -149,28 +164,40 @@ def demix(
             if progress_bar:
                 progress_bar.close()
 
-            # Compute final estimated sources
-            estimated_sources = result / counter
-            estimated_sources = estimated_sources.cpu().numpy()
+            estimated_sources = (result / counter).numpy()
             np.nan_to_num(estimated_sources, copy=False, nan=0.0)
 
-            # Remove padding for generic mode
-            if mode == "generic":
-                if length_init > 2 * border and border > 0:
-                    estimated_sources = estimated_sources[..., border:-border]
+            if mode == "generic" and length_init > 2 * border and border > 0:
+                estimated_sources = estimated_sources[..., border:-border]
 
-    # Return the result as a dictionary or a single array
-    if mode == "demucs":
-        instruments = config.training.instruments
-    else:
-        instruments = prefer_target_instrument(config)
-
+    instruments = (
+        config.training.instruments if mode == "demucs" else prefer_target_instrument(config)
+    )
     ret_data = {k: v for k, v in zip(instruments, estimated_sources)}
 
     if mode == "demucs" and num_instruments <= 1:
         return estimated_sources
-    else:
-        return ret_data
+    return ret_data
+
+
+def demix(
+    config: ConfigDict,
+    model: torch.nn.Module,
+    mix: torch.Tensor,
+    device: torch.device,
+    model_type: str,
+    pbar: bool = False,
+) -> Union[Dict[str, np.ndarray], np.ndarray]:
+    """Perform blind audio source separation with overlapping chunked inference."""
+    return _demix_core(
+        config=config,
+        model=model,
+        mix=mix,
+        device=device,
+        model_type=model_type,
+        spk_emb=None,
+        pbar=pbar,
+    )
 
 
 def demix_with_spk(
@@ -182,139 +209,16 @@ def demix_with_spk(
     model_type: str,
     pbar: bool = False,
 ) -> Union[Dict[str, np.ndarray], np.ndarray]:
-    """
-    Perform audio source separation with a given model and speaker embedding.
-    """
-
-    should_print = not dist.is_initialized() or dist.get_rank() == 0
-
-    mix = torch.tensor(mix, dtype=torch.float32)
-
-    if model_type == "htdemucs":
-        mode = "demucs"
-    else:
-        mode = "generic"
-    # Define processing parameters based on the mode
-    if mode == "demucs":
-        chunk_size = config.training.samplerate * config.training.segment
-        num_instruments = len(config.training.instruments)
-        num_overlap = config.inference.num_overlap
-        step = chunk_size // num_overlap
-    else:
-        if "chunk_size" in config.inference:
-            chunk_size = config.inference.chunk_size
-        else:
-            chunk_size = config.audio.chunk_size
-        num_instruments = len(prefer_target_instrument(config))
-        num_overlap = config.inference.num_overlap
-
-        if chunk_size < 10 or not 1 <= num_overlap <= chunk_size:
-            raise ValueError("Require chunk_size >= 10 and 1 <= num_overlap <= chunk_size.")
-        fade_size = chunk_size // 10
-        step = chunk_size // num_overlap
-        border = chunk_size - step
-        length_init = mix.shape[-1]
-        windowing_array = _getWindowingArray(chunk_size, fade_size)
-        # Add padding for generic mode to handle edge artifacts
-        if length_init > 2 * border and border > 0:
-            mix = nn.functional.pad(mix, (border, border), mode="reflect")
-
-    batch_size = config.inference.batch_size
-    if batch_size < 1:
-        raise ValueError("Inference batch size must be positive.")
-
-    use_amp = getattr(config.training, "use_amp", True)
-
-    with torch.autocast(
-        device_type="cuda", enabled=use_amp and torch.device(device).type == "cuda"
-    ):
-        with torch.inference_mode():
-            # Initialize result and counter tensors
-            req_shape = (num_instruments,) + mix.shape
-            result = torch.zeros(req_shape, dtype=torch.float32)
-            counter = torch.zeros(req_shape, dtype=torch.float32)
-
-            i = 0
-            batch_data = []
-            batch_locations = []
-            if pbar and should_print:
-                progress_bar = tqdm(total=mix.shape[1], desc="Processing audio chunks", leave=False)
-            else:
-                progress_bar = None
-
-            while i < mix.shape[1]:
-                # Extract chunk and apply padding if necessary
-                part = mix[:, i : i + chunk_size].to(device)
-                chunk_len = part.shape[-1]
-                if mode == "generic" and chunk_len > chunk_size // 2:
-                    pad_mode = "reflect"
-                else:
-                    pad_mode = "constant"
-                part = nn.functional.pad(part, (0, chunk_size - chunk_len), mode=pad_mode, value=0)
-
-                batch_data.append(part)
-                batch_locations.append((i, chunk_len))
-                i += step
-
-                # Process batch if it's full or the end is reached
-                if len(batch_data) >= batch_size or i >= mix.shape[1]:
-                    arr = torch.stack(batch_data, dim=0)
-
-                    # Prepare speaker embedding
-                    current_bs = arr.shape[0]
-                    if spk_emb.dim() == 1:
-                        batch_spk = spk_emb.unsqueeze(0).repeat(current_bs, 1).to(device)
-                    else:
-                        batch_spk = spk_emb.repeat(current_bs, 1).to(device)
-
-                    x = model(arr, batch_spk)
-
-                    for j, (start, seg_len) in enumerate(batch_locations):
-                        if mode == "generic":
-                            # Compute boundary fades per chunk, independently of batching.
-                            window = windowing_array.clone()
-                            if start == 0:
-                                window[:fade_size] = 1
-                            if start + seg_len >= mix.shape[1] and fade_size:
-                                window[-fade_size:] = 1
-                            result[..., start : start + seg_len] += (
-                                x[j, ..., :seg_len].cpu() * window[..., :seg_len]
-                            )
-                            counter[..., start : start + seg_len] += window[..., :seg_len]
-                        else:
-                            result[..., start : start + seg_len] += x[j, ..., :seg_len].cpu()
-                            counter[..., start : start + seg_len] += 1.0
-
-                    batch_data.clear()
-                    batch_locations.clear()
-
-                if progress_bar:
-                    progress_bar.update(step)
-
-            if progress_bar:
-                progress_bar.close()
-
-            # Compute final estimated sources
-            estimated_sources = result / counter
-            estimated_sources = estimated_sources.cpu().numpy()
-            np.nan_to_num(estimated_sources, copy=False, nan=0.0)
-            # Remove padding for generic mode
-            if mode == "generic":
-                if length_init > 2 * border and border > 0:
-                    estimated_sources = estimated_sources[..., border:-border]
-
-    # Return the result as a dictionary or a single array
-    if mode == "demucs":
-        instruments = config.training.instruments
-    else:
-        instruments = prefer_target_instrument(config)
-
-    ret_data = {k: v for k, v in zip(instruments, estimated_sources)}
-
-    if mode == "demucs" and num_instruments <= 1:
-        return estimated_sources
-    else:
-        return ret_data
+    """Perform speaker-guided audio source separation with overlapping chunked inference."""
+    return _demix_core(
+        config=config,
+        model=model,
+        mix=mix,
+        device=device,
+        model_type=model_type,
+        spk_emb=spk_emb,
+        pbar=pbar,
+    )
 
 
 def demix_with_spk_2(
@@ -536,31 +440,42 @@ def get_optimizer(config: ConfigDict, model: torch.nn.Module) -> torch.optim.Opt
             print(f"Optimizer params from config:\n{optim_params}")
 
     name_optimizer = getattr(config.training, "optimizer", "No optimizer in config")
+    trainable_params = [p for p in model.parameters() if p.requires_grad]
+    if not trainable_params:
+        raise ValueError("Model has no trainable parameters (all requires_grad=False).")
+
+    # Enable fused CUDA kernels automatically for Adam/AdamW when all trainable tensors are on CUDA.
+    all_cuda_float = torch.cuda.is_available() and all(
+        p.is_cuda and p.is_floating_point() for p in trainable_params
+    )
 
     if name_optimizer == "adam":
-        optimizer = Adam(model.parameters(), lr=config.training.lr, **optim_params)
+        if all_cuda_float and "fused" not in optim_params and "foreach" not in optim_params:
+            optim_params["fused"] = True
+        optimizer = Adam(trainable_params, lr=config.training.lr, **optim_params)
     elif name_optimizer == "adamw":
-        optimizer = AdamW(model.parameters(), lr=config.training.lr, **optim_params)
+        if all_cuda_float and "fused" not in optim_params and "foreach" not in optim_params:
+            optim_params["fused"] = True
+        optimizer = AdamW(trainable_params, lr=config.training.lr, **optim_params)
     elif name_optimizer == "radam":
-        optimizer = RAdam(model.parameters(), lr=config.training.lr, **optim_params)
+        optimizer = RAdam(trainable_params, lr=config.training.lr, **optim_params)
     elif name_optimizer == "rmsprop":
-        optimizer = RMSprop(model.parameters(), lr=config.training.lr, **optim_params)
+        optimizer = RMSprop(trainable_params, lr=config.training.lr, **optim_params)
     elif name_optimizer == "prodigy":
         from prodigyopt import Prodigy
 
-        # you can choose weight decay value based on your problem, 0 by default
-        # We recommend using lr=1.0 (default) for all networks.
-        optimizer = Prodigy(model.parameters(), lr=config.training.lr, **optim_params)
+        # Weight decay can be tuned per task (0 by default); lr=1.0 is recommended.
+        optimizer = Prodigy(trainable_params, lr=config.training.lr, **optim_params)
     elif name_optimizer == "adamw8bit":
         import bitsandbytes as bnb
 
-        optimizer = bnb.optim.AdamW8bit(model.parameters(), lr=config.training.lr, **optim_params)
+        optimizer = bnb.optim.AdamW8bit(trainable_params, lr=config.training.lr, **optim_params)
     elif name_optimizer == "muon":
         if should_print:
             print("Using Muon optimizer (Single-Device) with AdamW for auxiliary parameters.")
 
-        muon_params = [p for p in model.parameters() if p.ndim >= 2]
-        adam_params = [p for p in model.parameters() if p.ndim < 2]
+        muon_params = [p for p in trainable_params if p.ndim >= 2]
+        adam_params = [p for p in trainable_params if p.ndim < 2]
 
         if (
             not hasattr(config, "optimizer")
@@ -587,11 +502,9 @@ def get_optimizer(config: ConfigDict, model: torch.nn.Module) -> torch.optim.Opt
     elif name_optimizer == "sgd":
         if should_print:
             print("Use SGD optimizer")
-        optimizer = SGD(model.parameters(), lr=config.training.lr, **optim_params)
+        optimizer = SGD(trainable_params, lr=config.training.lr, **optim_params)
     else:
-        if should_print:
-            print(f"Unknown optimizer: {name_optimizer}")
-        exit()
+        raise ValueError(f"Unknown optimizer: {name_optimizer}")
     return optimizer
 
 
@@ -733,9 +646,9 @@ def load_not_compatible_weights(
     Load a possibly incompatible state dict into `model` with best-effort matching.
 
     Accepts either a raw state_dict or a checkpoint dict with weights under "state" or "state_dict".
-    For each param/buffer in `model`: if the name exists and shapes match → copy;
-    if ndim matches but shapes differ → zero-pad/crop the source to fit the target;
-    if the name is missing or ndim differs → skip. Optional logging on rank 0 when `verbose=True`.
+    For each param/buffer in `model`: if the name exists and shapes match -> copy;
+    if ndim matches but shapes differ -> zero-pad/crop the source to fit the target;
+    if the name is missing or ndim differs -> skip. Optional logging on rank 0 when `verbose=True`.
 
     Args:
         model: Target PyTorch module.

@@ -28,9 +28,20 @@ class DiffusionWrapper(AuxiliaryTraining):
         self.device = torch.device(accelerator.device if accelerator else device or "cpu")
         self.model = get_diffusion_model(self.config.model_type, self.config).to(self.device)
         self.flow_matcher = ConditionalFlowMatcher(sigma=self.config.sigma)
-        self.window = getattr(torch, f"{self.config.window}_window")(self.config.win_length)
+        self.window = getattr(torch, f"{self.config.window}_window")(
+            self.config.win_length, dtype=torch.float32
+        )
+        self._window_cache: dict[str, torch.Tensor] = {}
         self._init_optimizer()
         self._prepare_training()
+
+    def _get_window(self, device: torch.device) -> torch.Tensor:
+        key = str(device)
+        window = self._window_cache.get(key)
+        if window is None or window.device != device:
+            window = self.window.to(device=device, dtype=torch.float32)
+            self._window_cache[key] = window
+        return window
 
     def _init_optimizer(self) -> None:
         cfg = self.config
@@ -42,6 +53,8 @@ class DiffusionWrapper(AuxiliaryTraining):
             kwargs["momentum"] = 0.9
         else:
             kwargs.update(betas=cfg.betas, eps=cfg.eps)
+            if self.device.type == "cuda":
+                kwargs["fused"] = True
         self.optimizer = optimizers[cfg.optimizer_type](self.model.parameters(), **kwargs)
         if cfg.scheduler_type == "constant":
             self.scheduler = torch.optim.lr_scheduler.LambdaLR(self.optimizer, lambda _: 1.0)
@@ -70,7 +83,7 @@ class DiffusionWrapper(AuxiliaryTraining):
             n_fft=self.config.n_fft,
             hop_length=self.config.hop_length,
             win_length=self.config.win_length,
-            window=self.window.to(wave),
+            window=self._get_window(flattened.device),
             center=self.config.center,
             pad_mode="constant",
             normalized=self.config.normalized,
@@ -88,7 +101,7 @@ class DiffusionWrapper(AuxiliaryTraining):
             n_fft=self.config.n_fft,
             hop_length=self.config.hop_length,
             win_length=self.config.win_length,
-            window=self.window.to(spec.device),
+            window=self._get_window(complex_spec.device),
             center=self.config.center,
             normalized=self.config.normalized,
             length=length,
@@ -141,16 +154,32 @@ class DiffusionWrapper(AuxiliaryTraining):
             if t.shape != (source.shape[0],):
                 raise ValueError("t must be a scalar or one value per original batch item.")
             train_steps = 1
-        terms = []
+
+        # Backpropagate each sampled flow step immediately so only one velocity graph
+        # stays resident in VRAM at a time while preserving exact averaged gradients.
+        total_flow_loss = source.new_zeros(())
+        scale = self.config.diffusion_loss_weight / (train_steps * self.config.grad_acc_step)
         for _ in range(train_steps):
             sampled_t, xt, ut = self.flow_matcher.sample_location_and_conditional_flow(
                 source, target, t=t
             )
             predicted = self._predict_velocity(xt, sampled_t)
-            terms.append(loss_function(predicted.float(), ut.float()))
-        flow_loss = torch.stack(terms).mean()
+            step_loss = loss_function(predicted.float(), ut.float())
+            if not torch.isfinite(step_loss):
+                self.optimizer.zero_grad(set_to_none=True)
+                self._pending_steps = 0
+                raise ValueError("Auxiliary training loss is non-finite.")
+            scaled = step_loss * scale
+            if self.accelerator is None:
+                scaled.backward()
+            else:
+                self.accelerator.backward(scaled)
+            total_flow_loss = total_flow_loss + step_loss.detach()
+            del predicted, step_loss, scaled, xt, ut
+
+        self._finish_accumulated_step()
+        flow_loss = total_flow_loss / train_steps
         weighted_loss = flow_loss * self.config.diffusion_loss_weight
-        self._backward_step(weighted_loss)
         return {
             "diffusion_loss": weighted_loss.detach(),
             "flow_matching_loss": flow_loss.detach(),

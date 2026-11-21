@@ -117,9 +117,20 @@ checkpoint/
 checkpoints/
 last_ckpt/
 last_discriminator_ckpt/
+last_additional_model_ckpt/
 musdb_eval_results/
+model_structure_and_precision.txt
 nohup.out
 slurm-*.out
+torch_compile_debug/
+profiler/
+*.prof
+*.nsys-rep
+*.ncu-rep
+
+# Downloaded third-party speaker checkpoint repositories
+**/speech_campplus_*/
+mss_api/ckpt/
 
 # New model binaries require an explicit, reviewed Git LFS add. Existing
 # tracked checkpoints remain tracked; do not ignore ckpts/ or models/ because

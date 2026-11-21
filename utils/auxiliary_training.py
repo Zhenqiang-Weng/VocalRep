@@ -26,16 +26,7 @@ class AuxiliaryTraining:
             )
         self.optimizer.zero_grad(set_to_none=True)
 
-    def _backward_step(self, loss: torch.Tensor) -> None:
-        if not torch.isfinite(loss):
-            self.optimizer.zero_grad(set_to_none=True)
-            self._pending_steps = 0
-            raise ValueError("Auxiliary training loss is non-finite.")
-        scaled = loss / self.config.grad_acc_step
-        if self.accelerator is None:
-            scaled.backward()
-        else:
-            self.accelerator.backward(scaled)
+    def _finish_accumulated_step(self) -> None:
         self._pending_steps += 1
         if self._pending_steps == self.config.grad_acc_step:
             clip = self.config.grad_clip_thresh
@@ -49,6 +40,18 @@ class AuxiliaryTraining:
                 self.scheduler.step()
             self.optimizer.zero_grad(set_to_none=True)
             self._pending_steps = 0
+
+    def _backward_step(self, loss: torch.Tensor) -> None:
+        if not torch.isfinite(loss):
+            self.optimizer.zero_grad(set_to_none=True)
+            self._pending_steps = 0
+            raise ValueError("Auxiliary training loss is non-finite.")
+        scaled = loss / self.config.grad_acc_step
+        if self.accelerator is None:
+            scaled.backward()
+        else:
+            self.accelerator.backward(scaled)
+        self._finish_accumulated_step()
 
     def _unwrapped_model(self):
         return self.model if self.accelerator is None else self.accelerator.unwrap_model(self.model)

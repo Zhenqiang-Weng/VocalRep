@@ -108,6 +108,91 @@ def build_training_parser(
         default=False,
         help="Pin DataLoader CPU memory.",
     )
+    parser.add_argument(
+        "--persistent-workers",
+        "--persistent_workers",
+        dest="persistent_workers",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Keep DataLoader workers alive across epochs when num_workers > 0.",
+    )
+    parser.add_argument(
+        "--prefetch-factor",
+        "--prefetch_factor",
+        dest="prefetch_factor",
+        type=int,
+        default=2,
+        help="Number of batches prefetched per DataLoader worker when num_workers > 0.",
+    )
+    parser.add_argument(
+        "--gradient-checkpointing",
+        "--gradient_checkpointing",
+        dest="gradient_checkpointing",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Override model activation checkpointing to reduce training VRAM.",
+    )
+    parser.add_argument(
+        "--gradient-accumulation-steps",
+        "--gradient_accumulation_steps",
+        dest="gradient_accumulation_steps",
+        type=int,
+        default=None,
+        help="Micro-steps per optimizer update (defaults to config.training.gradient_accumulation_steps).",
+    )
+    parser.add_argument(
+        "--compile",
+        dest="compile_model",
+        action="store_true",
+        help="Compile the separation model with torch.compile for higher throughput.",
+    )
+    parser.add_argument(
+        "--compile-mode",
+        "--compile_mode",
+        dest="compile_mode",
+        default="default",
+        choices=("default", "reduce-overhead", "max-autotune"),
+        help="Compilation mode passed to torch.compile when --compile is enabled.",
+    )
+    parser.add_argument(
+        "--allow-tf32",
+        "--allow_tf32",
+        dest="allow_tf32",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Allow TF32 matrix/cuDNN acceleration on Ampere+ GPUs (disabled when --deterministic).",
+    )
+    parser.add_argument(
+        "--log-interval",
+        "--log_interval",
+        dest="log_interval",
+        type=int,
+        default=10,
+        help="Sync and log training loss every N steps to avoid per-step GPU stalls.",
+    )
+    parser.add_argument(
+        "--valid-every",
+        "--valid_every",
+        dest="valid_every",
+        type=int,
+        default=1,
+        help="Run validation every N epochs (1 validates every epoch).",
+    )
+    parser.add_argument(
+        "--skip-valid",
+        "--skip_valid",
+        dest="skip_valid",
+        action="store_true",
+        help="Skip validation loops during training.",
+    )
+    parser.add_argument(
+        "--empty-cache-interval",
+        "--empty_cache_interval",
+        dest="empty_cache_interval",
+        type=int,
+        default=0,
+        help="Optionally call torch.cuda.empty_cache() every N steps (0 disables).",
+    )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
         "--deterministic",

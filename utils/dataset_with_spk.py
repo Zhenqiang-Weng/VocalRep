@@ -98,9 +98,9 @@ def load_chunk(path, length, chunk_size, offset=None):
         x = sf.read(path, dtype="float32")[0]
         if len(x.shape) == 1:
             # Mono case
-            pad = np.zeros((chunk_size - length))
+            pad = np.zeros((chunk_size - length,), dtype=np.float32)
         else:
-            pad = np.zeros([chunk_size - length, x.shape[-1]])
+            pad = np.zeros((chunk_size - length, x.shape[-1]), dtype=np.float32)
         x = np.concatenate([x, pad], axis=0)
     # Mono fix
     if len(x.shape) == 1:
@@ -221,6 +221,8 @@ class MSSDatasetWithSpk(torch.utils.data.Dataset):
         self.metadata = metadata
         self.chunk_size = config.audio.chunk_size
         self.min_mean_abs = config.audio.min_mean_abs
+        self._embedding_cache = {}
+        self._embedding_cache_max_size = 50000
 
         # optional safety check
         ti = getattr(self.config.training, "target_instrument", None)
@@ -293,7 +295,7 @@ class MSSDatasetWithSpk(torch.utils.data.Dataset):
             ]
             track_paths, metadata = self.read_from_metadata_cache(track_paths, None)
 
-            if read_metadata_procs <= 1:
+            if read_metadata_procs <= 1 or len(track_paths) == 0:
                 pbar = tqdm(track_paths) if should_print else track_paths
                 for path in pbar:
                     track_path, track_length = get_track_set_length(
@@ -301,21 +303,19 @@ class MSSDatasetWithSpk(torch.utils.data.Dataset):
                     )
                     metadata.append((track_path, track_length))
             else:
-                p = multiprocessing.Pool(processes=read_metadata_procs)
-                if should_print:
-                    with tqdm(total=len(track_paths)) as pbar:
-                        track_iter = p.imap(
-                            get_track_set_length,
-                            zip(
-                                track_paths,
-                                itertools.repeat(self.instruments),
-                                itertools.repeat(self.file_types),
-                            ),
-                        )
-                        for track_path, track_length in track_iter:
-                            metadata.append((track_path, track_length))
-                            pbar.update()
-                p.close()
+                with multiprocessing.Pool(processes=read_metadata_procs) as pool:
+                    track_iter = pool.imap(
+                        get_track_set_length,
+                        zip(
+                            track_paths,
+                            itertools.repeat(self.instruments),
+                            itertools.repeat(self.file_types),
+                        ),
+                    )
+                    if should_print:
+                        track_iter = tqdm(track_iter, total=len(track_paths))
+                    for track_path, track_length in track_iter:
+                        metadata.append((track_path, track_length))
 
         elif self.dataset_type == 2:
             # IMPORTANT: use instruments (no mix_instruments concept)
@@ -333,20 +333,18 @@ class MSSDatasetWithSpk(torch.utils.data.Dataset):
 
                 track_paths, metadata[instr] = self.read_from_metadata_cache(track_paths, instr)
 
-                if read_metadata_procs <= 1:
+                if read_metadata_procs <= 1 or len(track_paths) == 0:
                     pbar = tqdm(track_paths) if should_print else track_paths
                     for path in pbar:
                         length = sf.info(path).frames
                         metadata[instr].append((path, length))
                 else:
-                    p = multiprocessing.Pool(processes=read_metadata_procs)
-                    track_iter = p.imap(get_track_length, track_paths)
-                    if should_print:
-                        track_iter = tqdm(track_iter, total=len(track_paths))
-
-                    for out in track_iter:
-                        metadata[instr].append(out)
-                    p.close()
+                    with multiprocessing.Pool(processes=read_metadata_procs) as pool:
+                        track_iter = pool.imap(get_track_length, track_paths)
+                        if should_print:
+                            track_iter = tqdm(track_iter, total=len(track_paths))
+                        for out in track_iter:
+                            metadata[instr].append(out)
 
         elif self.dataset_type == 3:
             import pandas as pd
@@ -436,7 +434,7 @@ class MSSDatasetWithSpk(torch.utils.data.Dataset):
         if self.aug:
             source = self.augm_data(source, instr)
         source = ensure_two_channels(source)
-        return torch.tensor(source, dtype=torch.float32), track_path
+        return torch.from_numpy(np.ascontiguousarray(source, dtype=np.float32)), track_path
 
     def load_random_mix(self):
         """
@@ -466,7 +464,7 @@ class MSSDatasetWithSpk(torch.utils.data.Dataset):
                     high=self.config.augmentations.loudness_max,
                     size=(len(mixup),),
                 )
-                loud_values = torch.tensor(loud_values, dtype=torch.float32)
+                loud_values = torch.as_tensor(loud_values, dtype=torch.float32)
                 mixup *= loud_values[:, None, None]
                 s1 = mixup.mean(dim=0, dtype=torch.float32)
 
@@ -475,10 +473,22 @@ class MSSDatasetWithSpk(torch.utils.data.Dataset):
         res = torch.stack(res)
         return res, [], None
 
+    def _load_track_embeddings(self, embedding_path: str):
+        """Load and cache speaker embeddings per track to avoid repeated disk reads."""
+        cached = self._embedding_cache.get(embedding_path)
+        if cached is not None:
+            return cached
+        embeddings = np.load(embedding_path, allow_pickle=False)
+        if embeddings.dtype != np.float32:
+            embeddings = embeddings.astype(np.float32, copy=False)
+        if len(self._embedding_cache) < self._embedding_cache_max_size:
+            self._embedding_cache[embedding_path] = embeddings
+        return embeddings
+
     def load_aligned_data(self):
         """
         dataset_type==4 path-level aligned loading.
-        Keeps embedding.npy loading logic.
+        Keeps embedding.npy loading logic with worker-local caching.
         """
         track_path, track_length = random.choice(self.metadata)
         should_print = not dist.is_initialized() or dist.get_rank() == 0
@@ -540,23 +550,25 @@ class MSSDatasetWithSpk(torch.utils.data.Dataset):
             for i, instr in enumerate(self.instruments):
                 res[i] = ensure_two_channels(self.augm_data(res[i], instr))
 
-        # Load embeddings
+        # Load embeddings (cached per worker)
         embedding = None
         embedding_path = os.path.join(track_path, "embeddings.npy")
-        if os.path.exists(embedding_path):
+        if embedding_path in self._embedding_cache or os.path.exists(embedding_path):
             try:
-                embeddings = np.load(embedding_path)
+                embeddings = self._load_track_embeddings(embedding_path)
                 if embeddings.shape[0] > 0:
                     num_samples = min(20, embeddings.shape[0])
-                    indices = np.random.choice(embeddings.shape[0], num_samples, replace=False)
-                    selected_embeddings = embeddings[indices]
-                    embedding = np.mean(selected_embeddings, axis=0)  # (192,)
-                    embedding = torch.from_numpy(embedding).float()
+                    if num_samples == embeddings.shape[0]:
+                        emb_mean = embeddings.mean(axis=0)
+                    else:
+                        indices = np.random.choice(embeddings.shape[0], num_samples, replace=False)
+                        emb_mean = embeddings[indices].mean(axis=0)
+                    embedding = torch.from_numpy(np.ascontiguousarray(emb_mean, dtype=np.float32))
             except Exception as e:
                 if should_print:
                     print(f"Error loading embeddings from {embedding_path}: {e}")
 
-        return torch.tensor(res, dtype=torch.float32), [], embedding
+        return torch.from_numpy(np.ascontiguousarray(res, dtype=np.float32)), [], embedding
 
     def augm_data(self, source, instr):
         # source.shape = (2, L)
@@ -848,12 +860,12 @@ class MSSDatasetWithSpk(torch.utils.data.Dataset):
         # ---- mixing uses ONLY instruments stems ----
         all_sources = res  # (num_instr, 2, chunk)
 
-        if self.aug and "random_drop_stems" in self.config["augmentations"]:
+        if self.aug and self.config["augmentations"].get("random_drop_stems", False):
             drop_prob = self.config["augmentations"]["random_drop_stems_prob"]
             drop_set = set(self.config["augmentations"]["random_drop_stems_instruments"])
             for i, instrument in enumerate(self.instruments):
                 if instrument in drop_set and random.uniform(0, 1) < drop_prob:
-                    all_sources[i] = torch.zeros_like(all_sources[i])
+                    all_sources[i].zero_()
 
         # Randomly change loudness of each stem
         if (
@@ -866,30 +878,32 @@ class MSSDatasetWithSpk(torch.utils.data.Dataset):
                 high=self.config["augmentations"]["loudness_max"],
                 size=(len(all_sources),),
             )
-            loud_values = torch.tensor(loud_values, dtype=torch.float32)
+            loud_values = torch.as_tensor(loud_values, dtype=torch.float32)
             all_sources *= loud_values[:, None, None]
 
         res = all_sources
         mix = all_sources.sum(0)
 
-        # Mixture mp3 compression (kept)
-        if self.aug and "mp3_compression_on_mixture" in self.config["augmentations"]:
-            apply_aug = AU.Mp3Compression(
-                min_bitrate=self.config["augmentations"]["mp3_compression_on_mixture_bitrate_min"],
-                max_bitrate=self.config["augmentations"]["mp3_compression_on_mixture_bitrate_max"],
-                backend=self.config["augmentations"]["mp3_compression_on_mixture_backend"],
-                p=self.config["augmentations"]["mp3_compression_on_mixture"],
-            )
-            mix_conv = mix.cpu().numpy().astype(np.float32)
-            required_shape = mix_conv.shape
-            mix2 = apply_aug(samples=mix_conv, sample_rate=44100)
-            if mix2.shape != required_shape:
-                mix2 = mix2[..., : required_shape[-1]]
-            mix = torch.tensor(mix2, dtype=torch.float32)
-
-        if self.aug and "disharmony" in self.config["augmentations"]:
-            if self.config["augmentations"]["disharmony"]:
-                pass
+        # Mixture MP3 compression (roll probability before numpy conversion)
+        if self.aug:
+            mp3_prob = self.config["augmentations"].get("mp3_compression_on_mixture", 0.0)
+            if mp3_prob > 0 and random.random() < mp3_prob:
+                apply_aug = AU.Mp3Compression(
+                    min_bitrate=self.config["augmentations"][
+                        "mp3_compression_on_mixture_bitrate_min"
+                    ],
+                    max_bitrate=self.config["augmentations"][
+                        "mp3_compression_on_mixture_bitrate_max"
+                    ],
+                    backend=self.config["augmentations"]["mp3_compression_on_mixture_backend"],
+                    p=1.0,
+                )
+                mix_conv = mix.cpu().numpy().astype(np.float32, copy=False)
+                required_shape = mix_conv.shape
+                mix2 = apply_aug(samples=mix_conv, sample_rate=44100)
+                if mix2.shape != required_shape:
+                    mix2 = mix2[..., : required_shape[-1]]
+                mix = torch.from_numpy(np.ascontiguousarray(mix2, dtype=np.float32))
 
         # embeddings: keep output shape stable
         if embedding is None:

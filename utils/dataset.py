@@ -101,9 +101,9 @@ def load_chunk(path, length, chunk_size, offset=None):
         x = sf.read(path, dtype="float32")[0]
         if len(x.shape) == 1:
             # Mono case
-            pad = np.zeros((chunk_size - length))
+            pad = np.zeros((chunk_size - length,), dtype=np.float32)
         else:
-            pad = np.zeros([chunk_size - length, x.shape[-1]])
+            pad = np.zeros((chunk_size - length, x.shape[-1]), dtype=np.float32)
         x = np.concatenate([x, pad], axis=0)
     # Mono fix
     if len(x.shape) == 1:
@@ -276,7 +276,7 @@ class MSSDataset(torch.utils.data.Dataset):
             ]
             track_paths, metadata = self.read_from_metadata_cache(track_paths, None)
 
-            if read_metadata_procs <= 1:
+            if read_metadata_procs <= 1 or len(track_paths) == 0:
                 pbar = tqdm(track_paths) if should_print else track_paths
                 for path in pbar:
                     track_path, track_length = get_track_set_length(
@@ -284,21 +284,19 @@ class MSSDataset(torch.utils.data.Dataset):
                     )
                     metadata.append((track_path, track_length))
             else:
-                p = multiprocessing.Pool(processes=read_metadata_procs)
-                if should_print:
-                    with tqdm(total=len(track_paths)) as pbar:
-                        track_iter = p.imap(
-                            get_track_set_length,
-                            zip(
-                                track_paths,
-                                itertools.repeat(self.instruments),
-                                itertools.repeat(self.file_types),
-                            ),
-                        )
-                        for track_path, track_length in track_iter:
-                            metadata.append((track_path, track_length))
-                            pbar.update()
-                p.close()
+                with multiprocessing.Pool(processes=read_metadata_procs) as pool:
+                    track_iter = pool.imap(
+                        get_track_set_length,
+                        zip(
+                            track_paths,
+                            itertools.repeat(self.instruments),
+                            itertools.repeat(self.file_types),
+                        ),
+                    )
+                    if should_print:
+                        track_iter = tqdm(track_iter, total=len(track_paths))
+                    for track_path, track_length in track_iter:
+                        metadata.append((track_path, track_length))
 
         elif self.dataset_type == 2:
             metadata = dict()
@@ -315,26 +313,24 @@ class MSSDataset(torch.utils.data.Dataset):
 
                 track_paths, metadata[instr] = self.read_from_metadata_cache(track_paths, instr)
 
-                if read_metadata_procs <= 1:
+                if read_metadata_procs <= 1 or len(track_paths) == 0:
                     pbar = tqdm(track_paths) if should_print else track_paths
                     for path in pbar:
                         length = sf.info(path).frames
                         metadata[instr].append((path, length))
                 else:
-                    p = multiprocessing.Pool(processes=read_metadata_procs)
-                    track_iter = p.imap(get_track_length, track_paths)
-                    if should_print:
-                        track_iter = tqdm(track_iter, total=len(track_paths))
-
-                    for out in track_iter:
-                        metadata[instr].append(out)
-                    p.close()
+                    with multiprocessing.Pool(processes=read_metadata_procs) as pool:
+                        track_iter = pool.imap(get_track_length, track_paths)
+                        if should_print:
+                            track_iter = tqdm(track_iter, total=len(track_paths))
+                        for out in track_iter:
+                            metadata[instr].append(out)
 
         elif self.dataset_type == 3:
             import pandas as pd
 
-            if type(self.data_path) != list:
-                data_path = [self.data_path]
+            if not isinstance(self.data_path, list):
+                self.data_path = [self.data_path]
 
             metadata = dict()
             for i in range(len(self.data_path)):
@@ -417,7 +413,7 @@ class MSSDataset(torch.utils.data.Dataset):
             source = self.augm_data(source, instr)
         source = ensure_two_channels(source)
         # Return audio data and track_path
-        return torch.tensor(source, dtype=torch.float32), track_path
+        return torch.from_numpy(np.ascontiguousarray(source, dtype=np.float32)), track_path
 
     def load_source_from_path(self, track_path, instr, track_length=None):
         """Load the requested instrument track from a path
@@ -477,7 +473,7 @@ class MSSDataset(torch.utils.data.Dataset):
 
         # Skip augmentation when loading additional tracks
         source = ensure_two_channels(source)
-        return torch.tensor(source, dtype=torch.float32)
+        return torch.from_numpy(np.ascontiguousarray(source, dtype=np.float32))
 
     def load_random_mix(self):
         res = []
@@ -933,7 +929,8 @@ class MSSDataset(torch.utils.data.Dataset):
         mix = all_sources.sum(0)  # Generate the mixture from all tracks
 
         if self.aug:
-            if "mp3_compression_on_mixture" in self.config["augmentations"]:
+            mp3_prob = self.config["augmentations"].get("mp3_compression_on_mixture", 0.0)
+            if mp3_prob > 0 and random.random() < mp3_prob:
                 apply_aug = AU.Mp3Compression(
                     min_bitrate=self.config["augmentations"][
                         "mp3_compression_on_mixture_bitrate_min"
@@ -942,27 +939,22 @@ class MSSDataset(torch.utils.data.Dataset):
                         "mp3_compression_on_mixture_bitrate_max"
                     ],
                     backend=self.config["augmentations"]["mp3_compression_on_mixture_backend"],
-                    p=self.config["augmentations"]["mp3_compression_on_mixture"],
+                    p=1.0,
                 )
-                mix_conv = mix.cpu().numpy().astype(np.float32)
+                mix_conv = mix.cpu().numpy().astype(np.float32, copy=False)
                 required_shape = mix_conv.shape
-                mix = apply_aug(samples=mix_conv, sample_rate=44100)
-                # Sometimes it gives longer audio (so we cut)
-                if mix.shape != required_shape:
-                    mix = mix[..., : required_shape[-1]]
-                mix = torch.tensor(mix, dtype=torch.float32)
+                mix_aug = apply_aug(samples=mix_conv, sample_rate=44100)
+                # Trim if encoder returned extra samples
+                if mix_aug.shape != required_shape:
+                    mix_aug = mix_aug[..., : required_shape[-1]]
+                mix = torch.from_numpy(np.ascontiguousarray(mix_aug, dtype=np.float32))
 
-            if "disharmony" in self.config["augmentations"]:
-                if self.config["augmentations"]["disharmony"]:
-                    # Apply disharmony effect here
-                    pass
-
-            if "random_drop_stems" in self.config["augmentations"]:
+            if self.config["augmentations"].get("random_drop_stems", False):
                 drop_prob = self.config["augmentations"]["random_drop_stems_prob"]
                 for i in range(res.shape[0]):
                     if random.uniform(0, 1) < drop_prob:
                         mix -= res[i]
-                        res[i] = torch.zeros_like(res[i])
+                        res[i].zero_()
 
         # If we need to optimize only given stem
         if self.config.training.target_instrument is not None:

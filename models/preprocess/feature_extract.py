@@ -38,26 +38,28 @@ class STFTProcessorBatch:
         self.config = config
         self.device = device
 
-        # main STFT window cache
-        self.window = self.config.window_fn(self.config.win_length, device=device)
+        # Main STFT window cache (always float32 for cuFFT compatibility).
+        self.window = self.config.window_fn(
+            self.config.win_length, device=device, dtype=torch.float32
+        )
 
-        # Cache for multi-resolution windows
-        self._multi_stft_windows: Dict[int, torch.Tensor] = {}
+        # Cache for multi-resolution windows keyed by (window_size, device_str).
+        self._multi_stft_windows: Dict[Tuple[int, str], torch.Tensor] = {}
 
     @classmethod
     def from_melband_roformer(cls, model, device: str = "cuda", istft_length: Optional[int] = None):
-        """
-        Build processor config from a MelBandRoformer-like instance.
+        """Build processor config from a MelBandRoformer-like instance.
+
         Only uses STFT / multi-STFT / stereo / stems attributes.
         """
-        # 1) main stft kwargs
+        # 1) Main STFT kwargs
         stft_kwargs = getattr(model, "stft_kwargs", {})
         n_fft = int(stft_kwargs.get("n_fft", 2048))
         hop_length = int(stft_kwargs.get("hop_length", 512))
         win_length = int(stft_kwargs.get("win_length", n_fft))
         normalized = bool(stft_kwargs.get("normalized", False))
 
-        # 2) multi stft
+        # 2) Multi-resolution STFT settings
         multi_weight = float(getattr(model, "multi_stft_resolution_loss_weight", 1.0))
         multi_window_sizes = tuple(
             getattr(model, "multi_stft_resolutions_window_sizes", (4096, 2048, 1024, 512, 256))
@@ -67,7 +69,7 @@ class STFTProcessorBatch:
         multi_norm = bool(multi_kwargs.get("normalized", False))
         multi_window_fn = getattr(model, "multi_stft_window_fn", torch.hann_window)
 
-        # 3) stereo / stems
+        # 3) Stereo / stems
         stereo = bool(getattr(model, "stereo", True))
         num_stems = int(getattr(model, "num_stems", 1))
 
@@ -93,33 +95,47 @@ class STFTProcessorBatch:
 
     def to(self, device: str):
         self.device = device
-        self.window = self.window.to(device)
-        self._multi_stft_windows = {k: v.to(device) for k, v in self._multi_stft_windows.items()}
+        self.window = self.window.to(device=device, dtype=torch.float32)
+        self._multi_stft_windows = {
+            (win_size, str(device)): w.to(device=device, dtype=torch.float32)
+            for (win_size, _), w in self._multi_stft_windows.items()
+        }
         return self
 
-    def _get_multi_stft_window(self, window_size: int):
-        if window_size not in self._multi_stft_windows:
-            self._multi_stft_windows[window_size] = self.config.multi_window_fn(
-                window_size, device=self.device
-            )
-        return self._multi_stft_windows[window_size]
+    def _get_main_window(self, device: torch.device) -> torch.Tensor:
+        if self.window.device != device:
+            self.window = self.window.to(device=device, dtype=torch.float32)
+        return self.window
+
+    def _get_multi_stft_window(self, window_size: int, device: torch.device) -> torch.Tensor:
+        key = (window_size, str(device))
+        window = self._multi_stft_windows.get(key)
+        if window is None or window.device != device:
+            window = self.config.multi_window_fn(window_size, device=device, dtype=torch.float32)
+            self._multi_stft_windows[key] = window
+        return window
 
     def stft_batch(self, audio: torch.Tensor) -> torch.Tensor:
-        """
-        audio: (batch, 2, samples) if stereo else (batch, 1, samples)
-        return: (batch, FREQ_BINS*channels, TIME_FRAMES, 2)
+        """Compute batched STFT features.
+
+        Args:
+            audio: Waveform tensor shaped (batch, 2, samples) if stereo else (batch, 1, samples).
+
+        Returns:
+            Real/imag STFT tensor shaped (batch, freq_bins * channels, time_frames, 2).
         """
         batch_size, channels, samples = audio.shape
 
-        # (batch, ch, samples) -> (batch*ch, samples)
-        audio_flat = audio.reshape(batch_size * channels, samples)
+        # Keep FFT in float32 for cuFFT compatibility under BF16/FP16 autocast.
+        audio_flat = audio.reshape(batch_size * channels, samples).float()
+        window = self._get_main_window(audio_flat.device)
 
         stft_complex = torch.stft(
             audio_flat,
             n_fft=self.config.n_fft,
             hop_length=self.config.hop_length,
             win_length=self.config.win_length,
-            window=self.window,
+            window=window,
             center=self.config.center,
             normalized=self.config.normalized,
             return_complex=True,
@@ -129,42 +145,43 @@ class STFTProcessorBatch:
         freq_bins = stft_real.shape[1]
         time_frames = stft_real.shape[2]
 
-        # (batch*ch, freq, time, 2) -> (batch, ch, freq, time, 2)
+        # (batch*ch, freq, time, 2) -> (batch, freq*ch, time, 2)
         stft_real = stft_real.view(batch_size, channels, freq_bins, time_frames, 2)
-
-        # -> (batch, freq, ch, time, 2) -> (batch, freq*ch, time, 2)
-        stft_real = stft_real.permute(0, 2, 1, 3, 4).reshape(
+        return stft_real.permute(0, 2, 1, 3, 4).reshape(
             batch_size, freq_bins * channels, time_frames, 2
         )
 
-        return stft_real
-
     def istft_batch(self, masked_stft: torch.Tensor) -> torch.Tensor:
-        """
-        masked_stft: (batch, num_stems, FREQ_BINS*channels, TIME_FRAMES, 2)
-        return:     (batch, num_stems, channels, samples)
+        """Invert batched masked STFT features to waveforms.
+
+        Args:
+            masked_stft: Tensor shaped (batch, num_stems, freq_bins * channels, time_frames, 2).
+
+        Returns:
+            Reconstructed waveform tensor shaped (batch, num_stems, channels, samples).
         """
         batch_size, num_stems, freq_ch, time_frames, _ = masked_stft.shape
 
-        # Infer the channel count
         channels = 2 if self.config.stereo else 1
         freq_bins = freq_ch // channels
 
-        # (b, n, f*ch, t, 2) -> (b, n, f, ch, t, 2)
+        # Cast to float32 before view_as_complex / istft since BF16 complex views are unsupported.
         x = masked_stft.view(batch_size, num_stems, freq_bins, channels, time_frames, 2)
-
-        # -> (b*n*ch, f, t, 2)
-        x = x.permute(0, 1, 3, 2, 4, 5).reshape(
-            batch_size * num_stems * channels, freq_bins, time_frames, 2
+        x = (
+            x.permute(0, 1, 3, 2, 4, 5)
+            .reshape(batch_size * num_stems * channels, freq_bins, time_frames, 2)
+            .float()
+            .contiguous()
         )
-        x = torch.view_as_complex(x.contiguous())
+        x_complex = torch.view_as_complex(x)
+        window = self._get_main_window(x_complex.device)
 
         audio = torch.istft(
-            x,
+            x_complex,
             n_fft=self.config.n_fft,
             hop_length=self.config.hop_length,
             win_length=self.config.win_length,
-            window=self.window,
+            window=window,
             center=self.config.center,
             normalized=self.config.normalized,
             return_complex=False,
@@ -179,26 +196,31 @@ class STFTProcessorBatch:
         target_audio: torch.Tensor,
         use_multi_stft: Optional[bool] = None,
     ) -> torch.Tensor:
-        """
-        recon_audio / target_audio: (batch, num_stems, channels, samples)
+        """Compute time-domain L1 plus optional multi-resolution STFT loss.
+
+        Args:
+            recon_audio: Predicted waveforms shaped (batch, num_stems, channels, samples).
+            target_audio: Reference waveforms shaped (batch, num_stems, channels, samples).
+            use_multi_stft: Override whether multi-resolution STFT loss is included.
         """
         if use_multi_stft is None:
             use_multi_stft = self.config.use_multi_stft_loss
 
         target_audio = target_audio[..., : recon_audio.shape[-1]]
-        loss = F.l1_loss(recon_audio, target_audio)
+        recon_f32 = recon_audio.float()
+        target_f32 = target_audio.float()
+        loss = F.l1_loss(recon_f32, target_f32)
 
         if not use_multi_stft:
             return loss
 
-        multi_loss = 0.0
-
-        recon_flat = recon_audio.reshape(-1, recon_audio.shape[-1])
-        target_flat = target_audio.reshape(-1, target_audio.shape[-1])
+        multi_loss = recon_f32.new_zeros(())
+        recon_flat = recon_f32.reshape(-1, recon_f32.shape[-1])
+        target_flat = target_f32.reshape(-1, target_f32.shape[-1])
+        device = recon_flat.device
 
         for window_size in self.config.multi_window_sizes:
-            window = self._get_multi_stft_window(window_size)
-
+            window = self._get_multi_stft_window(window_size, device)
             res_stft_kwargs = dict(
                 n_fft=max(window_size, self.config.n_fft),
                 hop_length=self.config.multi_hop_length,
@@ -210,8 +232,10 @@ class STFTProcessorBatch:
             )
 
             recon_Y = torch.stft(recon_flat, **res_stft_kwargs)
-            target_Y = torch.stft(target_flat, **res_stft_kwargs)
+            with torch.no_grad():
+                target_Y = torch.stft(target_flat, **res_stft_kwargs)
 
             multi_loss = multi_loss + F.l1_loss(recon_Y, target_Y)
+            del recon_Y, target_Y
 
         return loss + multi_loss * self.config.multi_weight

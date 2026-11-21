@@ -43,7 +43,17 @@ else
     export WANDB_MODE="${WANDB_MODE:-offline}"
 fi
 
-# Optional flags supported by train_accelerate_bf16.py.
+# Optional performance, VRAM, and training flags.
+PERSISTENT_WORKERS=true
+PREFETCH_FACTOR=2
+GRADIENT_CHECKPOINTING=true
+GRADIENT_ACCUMULATION_STEPS=1
+COMPILE_MODEL=false
+COMPILE_MODE="default"        # default, reduce-overhead, or max-autotune
+ALLOW_TF32=true
+LOG_INTERVAL=10
+VALID_EVERY=1
+SKIP_VALID=false
 PRE_VALIDATE=false
 USE_MIX_CONSISTENT_LOSS=false
 
@@ -81,6 +91,12 @@ validate_nonnegative_integer() {
     [[ "$value" =~ ^[0-9]+$ ]] || fail "$name must be a non-negative integer (got: $value)"
 }
 
+validate_positive_integer() {
+    local name="$1"
+    local value="$2"
+    [[ "$value" =~ ^[1-9][0-9]*$ ]] || fail "$name must be a positive integer (got: $value)"
+}
+
 validate_input_paths() {
     local path
     for path in "${TRAIN_DATA_PATHS[@]}"; do
@@ -106,11 +122,22 @@ require_command accelerate
 [[ "$DATASET_TYPE" =~ ^[1-4]$ ]] || fail "DATASET_TYPE must be 1, 2, 3, or 4"
 [[ "$MIXED_PRECISION" == no || "$MIXED_PRECISION" == fp16 || "$MIXED_PRECISION" == bf16 ]] || \
     fail "MIXED_PRECISION must be no, fp16, or bf16"
+[[ "$COMPILE_MODE" == default || "$COMPILE_MODE" == reduce-overhead || "$COMPILE_MODE" == max-autotune ]] || \
+    fail "COMPILE_MODE must be default, reduce-overhead, or max-autotune"
 validate_nonnegative_integer NUM_WORKERS "$NUM_WORKERS"
 validate_nonnegative_integer SEED "$SEED"
 validate_nonnegative_integer MAIN_PROCESS_PORT "$MAIN_PROCESS_PORT"
+validate_positive_integer PREFETCH_FACTOR "$PREFETCH_FACTOR"
+validate_positive_integer GRADIENT_ACCUMULATION_STEPS "$GRADIENT_ACCUMULATION_STEPS"
+validate_positive_integer LOG_INTERVAL "$LOG_INTERVAL"
+validate_positive_integer VALID_EVERY "$VALID_EVERY"
 validate_boolean PIN_MEMORY "$PIN_MEMORY"
+validate_boolean PERSISTENT_WORKERS "$PERSISTENT_WORKERS"
+validate_boolean GRADIENT_CHECKPOINTING "$GRADIENT_CHECKPOINTING"
+validate_boolean COMPILE_MODEL "$COMPILE_MODEL"
+validate_boolean ALLOW_TF32 "$ALLOW_TF32"
 validate_boolean DETERMINISTIC "$DETERMINISTIC"
+validate_boolean SKIP_VALID "$SKIP_VALID"
 validate_boolean PRE_VALIDATE "$PRE_VALIDATE"
 validate_boolean USE_MIX_CONSISTENT_LOSS "$USE_MIX_CONSISTENT_LOSS"
 
@@ -172,6 +199,10 @@ training_args=(
     --valid-path "${VALID_DATA_PATHS[@]}"
     --dataset-type "$DATASET_TYPE"
     --num-workers "$NUM_WORKERS"
+    --prefetch-factor "$PREFETCH_FACTOR"
+    --gradient-accumulation-steps "$GRADIENT_ACCUMULATION_STEPS"
+    --log-interval "$LOG_INTERVAL"
+    --valid-every "$VALID_EVERY"
     --seed "$SEED"
     --device-ids "${logical_gpu_ids[@]}"
     --wandb-project "$WANDB_PROJECT"
@@ -179,7 +210,12 @@ training_args=(
 )
 
 [[ "$PIN_MEMORY" == true ]] && training_args+=(--pin-memory)
+[[ "$PERSISTENT_WORKERS" == true ]] && training_args+=(--persistent-workers) || training_args+=(--no-persistent-workers)
+[[ "$GRADIENT_CHECKPOINTING" == true ]] && training_args+=(--gradient-checkpointing) || training_args+=(--no-gradient-checkpointing)
+[[ "$COMPILE_MODEL" == true ]] && training_args+=(--compile --compile-mode "$COMPILE_MODE")
+[[ "$ALLOW_TF32" == true ]] && training_args+=(--allow-tf32) || training_args+=(--no-allow-tf32)
 [[ "$DETERMINISTIC" == true ]] && training_args+=(--deterministic)
+[[ "$SKIP_VALID" == true ]] && training_args+=(--skip-valid)
 [[ "$PRE_VALIDATE" == true ]] && training_args+=(--pre-valid)
 [[ "$USE_MIX_CONSISTENT_LOSS" == true ]] && training_args+=(--use-mix-consistent-loss)
 [[ -n "$START_CHECKPOINT" ]] && training_args+=(--start-checkpoint "$START_CHECKPOINT")

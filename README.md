@@ -189,6 +189,13 @@ directory, and GPU settings near the top of
 English [training data preparation guide](docs/TRAINING_DATA.md) for dataset
 layouts and the validation checklist.
 
+All Accelerate training entry points share [`utils/train_utils.py`](utils/train_utils.py)
+and expose speed/VRAM controls including `--gradient-checkpointing`,
+`--gradient-accumulation-steps`, `--compile` (`--compile-mode`), `--allow-tf32`,
+`--persistent-workers`, `--prefetch-factor`, `--log-interval`, `--valid-every`,
+and `--skip-valid`. On CUDA GPUs, fused `Adam`/`AdamW`, TF32 matmul, cached
+STFT windows, and BF16-safe FP32 FFT/iSTFT are enabled automatically.
+
 Before launching a multi-GPU job, first use one GPU and a small dataset to
 verify data loading and one forward/backward pass.
 

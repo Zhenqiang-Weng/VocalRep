@@ -93,25 +93,13 @@ class Attend(nn.Module):
 
         Input tensors q, k, v expected in shape: (batch, heads, seq_len, dim_head) -> HND layout
         """
-        q_len, k_len, device = q.shape[-2], k.shape[-2], q.device
-
         # --- Priority 1: SageAttention ---
         if self.use_sage:
-            # Assumes q, k, v are FP16/BF16 (handled by autocast upstream)
-            # Assumes scale is handled internally by sageattn
-            # Assumes dropout is NOT handled by sageattn kernel
-            # is_causal=False based on how Attend is called in mel_band_roformer
-            out = sageattn(q, k, v, tensor_layout="HND", is_causal=False)
-            return out
             try:
-                return out
-                # print("Attempting SageAttention") # Optional: for debugging
-                out = sageattn(q, k, v, tensor_layout="HND", is_causal=False)
-                return out
+                return sageattn(q, k, v, tensor_layout="HND", is_causal=False)
             except Exception as e:
                 print(f"SageAttention failed with error: {e}. Falling back.")
                 self.use_sage = False  # Don't try Sage again if it failed once
-                # Decide fallback: Check if PyTorch SDPA is an option
                 if not self._sdpa_checked:
                     if version.parse(torch.__version__) >= version.parse("2.0.0"):
                         self.use_pytorch_sdpa = True
@@ -124,23 +112,15 @@ class Attend(nn.Module):
 
         # --- Priority 2: PyTorch SDPA ---
         if self.use_pytorch_sdpa:
-            # Use PyTorch's Scaled Dot Product Attention (SDPA)
-            # It handles scaling and dropout internally.
             try:
-                # print("Attempting PyTorch SDPA") # Optional: for debugging
-                # Let PyTorch choose the best backend (Flash V2, Mem Efficient, Math)
-                with torch.backends.cuda.sdp_kernel(
-                    enable_flash=True, enable_math=True, enable_mem_efficient=True
-                ):
-                    out = F.scaled_dot_product_attention(
-                        q,
-                        k,
-                        v,
-                        attn_mask=None,  # Assuming no explicit mask needed here
-                        dropout_p=self.dropout if self.training else 0.0,
-                        is_causal=False,  # Assuming not needed based on usage context
-                    )
-                return out
+                sdpa_kwargs = {
+                    "attn_mask": None,
+                    "dropout_p": self.dropout if self.training else 0.0,
+                    "is_causal": False,
+                }
+                if exists(self.scale):
+                    sdpa_kwargs["scale"] = self.scale
+                return F.scaled_dot_product_attention(q, k, v, **sdpa_kwargs)
             except Exception as e:
                 print(f"PyTorch SDPA failed with error: {e}. Falling back to einsum.")
                 self.use_pytorch_sdpa = False  # Fallback to einsum on error
@@ -148,14 +128,12 @@ class Attend(nn.Module):
         # Calculate scale
         scale = default(self.scale, q.shape[-1] ** -0.5)
 
-        # similarity
-        sim = einsum(f"b h i d, b h j d -> b h i j", q, k) * scale
+        # Similarity
+        sim = einsum("b h i d, b h j d -> b h i j", q, k) * scale
 
-        # attention
+        # Attention weights
         attn = sim.softmax(dim=-1)
         attn = self.attn_dropout(attn)  # Apply dropout ONLY in einsum path
 
-        # aggregate values
-        out = einsum(f"b h i j, b h j d -> b h i d", attn, v)
-
-        return out
+        # Aggregate values
+        return einsum("b h i j, b h j d -> b h i d", attn, v)

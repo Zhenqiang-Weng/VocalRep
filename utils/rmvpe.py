@@ -605,8 +605,8 @@ class RMVPE:
             todo_salience.append(salience[:, starts[idx] : ends[idx]][idx])
             todo_cents_mapping.append(self.cents_mapping[starts[idx] : ends[idx]])
         # t2 = ttime()
-        todo_salience = np.array(todo_salience)  # Frame length，9
-        todo_cents_mapping = np.array(todo_cents_mapping)  # Frame length，9
+        todo_salience = np.array(todo_salience)  # (num_frames, 9)
+        todo_cents_mapping = np.array(todo_cents_mapping)  # (num_frames, 9)
         product_sum = np.sum(todo_salience * todo_cents_mapping, 1)
         weight_sum = np.sum(todo_salience, 1)  # Frame length
         devided = product_sum / weight_sum  # Frame length

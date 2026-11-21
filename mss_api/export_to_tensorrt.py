@@ -8,8 +8,9 @@ import sys
 import os
 from pathlib import Path
 
-current_dir = os.path.dirname(os.path.abspath(__file__))
-sys.path.append(current_dir)
+repo_root = str(Path(__file__).resolve().parent.parent)
+if repo_root not in sys.path:
+    sys.path.insert(0, repo_root)
 
 from models.bs_roformer.bs_roformer_exportable import (
     BDCSGBSRoformerExportable,
@@ -21,7 +22,7 @@ from types import SimpleNamespace
 
 
 def export_onnx(model_path, config_path, output_path, batch_size=1):
-    """Export core model to ONNX"""
+    """Export core model to ONNX."""
     print(f"Loading full model: {model_path}")
 
     args = SimpleNamespace()
@@ -40,7 +41,7 @@ def export_onnx(model_path, config_path, output_path, batch_size=1):
     model_cfg = config.model
 
     # Print configuration details
-    print(f"\n=== Model Config ===")
+    print("\n=== Model Config ===")
     print(f"  dim: {model_cfg.dim}")
     print(f"  depth: {model_cfg.depth}")
     print(f"  heads: {model_cfg.heads}")
@@ -71,7 +72,7 @@ def export_onnx(model_path, config_path, output_path, batch_size=1):
     hop_length = model_cfg.stft_hop_length
     n_fft = model_cfg.stft_n_fft
 
-    # Formula when center=True：time_frames = floor(samples / hop_length) + 1
+    # Formula when center=True: time_frames = floor(samples / hop_length) + 1
     time_frames = chunk_size // hop_length + 1
     freq_bins = n_fft // 2 + 1  # 1025
     spk_dim = 192

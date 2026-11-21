@@ -9,9 +9,9 @@ def main():
     # =======================================================
     # Configure paths shared by all examples
     # =======================================================
-    model_type = "bdc_sg_bs_roformer"
-    config_path = "ckpt/bdc_sg_bs_roformer/config.yaml"
-    ckpt_path = "ckpt/bdc_sg_bs_roformer/model_bdc_sg_bs_roformer_ep_20_sisdr_9.5412.ckpt"
+    model_type = "spk_bs_roformer"
+    config_path = "ckpts/multi_stem/config.yaml"
+    ckpt_path = "ckpts/multi_stem/model_spk_bs_roformer_ep_5_sisdr_9.8275.ckpt"
 
     # Output directory
     output_root = "results/api_inference"
@@ -25,7 +25,7 @@ def main():
         model_type=model_type,
         config_path=config_path,
         model_path=ckpt_path,
-        device_ids=[4],
+        device_ids=[0],
     )
     print("Model loaded.")
 

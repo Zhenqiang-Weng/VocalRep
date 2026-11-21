@@ -21,13 +21,14 @@ try:
 except Exception:
     _HAS_SCIPY = False
 
-current_dir = os.path.dirname(os.path.abspath(__file__))
-sys.path.append(current_dir)
+repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if repo_root not in sys.path:
+    sys.path.insert(0, repo_root)
 
 from utils.audio_utils import normalize_audio, denormalize_audio, draw_spectrogram
 from utils.settings import get_model_from_config
 from utils.model_utils import demix, demix_with_spk_2, load_start_checkpoint
-from spk_extract import load_model as load_spk_model
+from spk_extract.pretrained import load_pretrained as load_spk_model
 
 import warnings
 
@@ -75,9 +76,7 @@ class AudioSeparator:
         autocast_dtype="fp16",
         **kwargs,
     ):
-        """
-        Initialize the separator
-        """
+        """Initialize the separator and optional speaker encoder."""
         self.args = SimpleNamespace()
         self.args.config_path = config_path
         self.args.start_check_point = model_path
@@ -87,7 +86,7 @@ class AudioSeparator:
 
         # Default parameter configuration
         defaults = {
-            "spk_model_path": "ckpt/speech_campplus_sv_zh_en_16k-common_advanced",
+            "spk_model_path": None,
             "segment_duration": 2,
             "energy_threshold": 0.1,
             "max_clusters": 2,
@@ -153,7 +152,7 @@ class AudioSeparator:
 
         # Load the speaker model
         if kwargs.get("verbose", True):
-            print(f"[Init] Loading Speaker Model...")
+            print("[Init] Loading Speaker Model...")
         try:
             self.spk_model = load_spk_model(self.args.spk_model_path, device=str(self.device))
             self.spk_model.eval()
@@ -249,7 +248,6 @@ class AudioSeparator:
             return {}
 
         mix = _ensure_2ch(mix)
-        mix_orig = mix.copy()
 
         norm_params = None
         if getattr(self.config, "inference", None) is not None and self.config.inference.get(
@@ -271,6 +269,7 @@ class AudioSeparator:
                     mix=mix,
                     spk_model=self.spk_model,
                     device=self.device,
+                    model_type=self.args.model_type,
                     segment_duration=self.args.segment_duration,
                     energy_threshold=self.args.energy_threshold,
                     max_clusters=self.args.max_clusters,
@@ -309,7 +308,13 @@ class AudioSeparator:
 
         try:
             # demix expects a tensor/ndarray and will run inference once
-            waveforms = demix(self.config, self.model, mix, device=self.device)
+            waveforms = demix(
+                self.config,
+                self.model,
+                mix,
+                device=self.device,
+                model_type=self.args.model_type,
+            )
         except Exception as e:
             print(f"[Error] demix failed for {audio_path}: {e}")
             return {}
@@ -598,7 +603,10 @@ if __name__ == "__main__":
     # Accept multiple IDs, such as --device_ids 0 1 2 3
     parser.add_argument("--device_ids", nargs="+", type=int, default=[0])
     parser.add_argument(
-        "--spk_model_path", type=str, default="ckpt/speech_campplus_sv_zh_en_16k-common_advanced"
+        "--spk_model_path",
+        type=str,
+        default=None,
+        help="Optional local CAM++ directory; defaults to the verified official cache.",
     )
     parser.add_argument("--no_autocast", action="store_true")
     parser.add_argument("--autocast_dtype", type=str, default="fp16", choices=["fp16", "bf16"])

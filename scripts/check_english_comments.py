@@ -11,7 +11,9 @@ import tokenize
 def main() -> None:
     """Check tracked source comments without inspecting datasets or model caches."""
     paths = subprocess.check_output(["git", "ls-files", "-z"], text=True).split("\0")
-    pattern = re.compile(r"[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]")
+    pattern = re.compile(
+        r"[\u3000-\u303f\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af\uff00-\uffef\u0400-\u04ff]"
+    )
     failures = []
     for name in paths:
         path = Path(name)

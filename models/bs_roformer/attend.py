@@ -1,24 +1,25 @@
-from functools import wraps
-from packaging import version
 from collections import namedtuple
-
+from functools import wraps
+import inspect
 import os
+from packaging import version
+
 import torch
-from torch import nn, einsum
+from torch import einsum, nn
 import torch.nn.functional as F
 
-from einops import rearrange, reduce
-
-# constants
-
-from torch.backends.cuda import sdp_kernel
-
+# Constants
 
 FlashAttentionConfig = namedtuple(
     "FlashAttentionConfig", ["enable_flash", "enable_math", "enable_mem_efficient"]
 )
 
-# helpers
+_SDPA_SUPPORTS_SCALE = (
+    hasattr(F, "scaled_dot_product_attention")
+    and "scale" in inspect.signature(F.scaled_dot_product_attention).parameters
+)
+
+# Helpers
 
 
 def exists(val):
@@ -45,10 +46,12 @@ def once(fn):
 
 print_once = once(print)
 
-# main class
+# Main class
 
 
 class Attend(nn.Module):
+    """Scaled dot-product attention with PyTorch 2.x SDPA acceleration."""
+
     def __init__(self, dropout=0.0, flash=False, scale=None):
         super().__init__()
         self.scale = scale
@@ -60,8 +63,7 @@ class Attend(nn.Module):
             "in order to use flash attention, you must be using pytorch 2.0 or above"
         )
 
-        # determine efficient attention configs for cuda and cpu
-
+        # Determine efficient attention capabilities for CUDA and CPU.
         self.cpu_config = FlashAttentionConfig(True, True, True)
         self.cuda_config = None
 
@@ -74,67 +76,50 @@ class Attend(nn.Module):
         if device_version >= version.parse("8.0"):
             if os.name == "nt":
                 print_once(
-                    "Windows OS detected, using math or mem efficient attention if input tensor is on cuda"
+                    "Windows OS detected; using math or memory-efficient SDPA on CUDA tensors."
                 )
                 self.cuda_config = FlashAttentionConfig(False, True, True)
             else:
                 print_once(
-                    "GPU Compute Capability equal or above 8.0, using flash attention if input tensor is on cuda"
+                    "GPU compute capability >= 8.0; using FlashAttention / SDPA on CUDA tensors."
                 )
                 self.cuda_config = FlashAttentionConfig(True, False, False)
         else:
             print_once(
-                "GPU Compute Capability below 8.0, using math or mem efficient attention if input tensor is on cuda"
+                "GPU compute capability < 8.0; using math or memory-efficient SDPA on CUDA tensors."
             )
             self.cuda_config = FlashAttentionConfig(False, True, True)
 
     def flash_attn(self, q, k, v):
-        _, heads, q_len, _, k_len, is_cuda, device = *q.shape, k.shape[-2], q.is_cuda, q.device
+        dropout_p = self.dropout if self.training else 0.0
 
+        # Pass scale directly to SDPA when supported to avoid allocating a scaled copy of q.
         if exists(self.scale):
+            if _SDPA_SUPPORTS_SCALE:
+                return F.scaled_dot_product_attention(
+                    q, k, v, dropout_p=dropout_p, scale=self.scale
+                )
             default_scale = q.shape[-1] ** -0.5
             q = q * (self.scale / default_scale)
 
-        # Check if there is a compatible device for flash attention
-
-        config = self.cuda_config if is_cuda else self.cpu_config
-
-        # pytorch 2.0 flash attn: q, k, v, mask, dropout, softmax_scale
-
-        with sdp_kernel(enable_flash=True, enable_mem_efficient=True, enable_math=True):
-            out = F.scaled_dot_product_attention(
-                q, k, v, dropout_p=self.dropout if self.training else 0.0
-            )
-
-        return out
+        # Let PyTorch's native SDPA dispatcher pick the fastest available kernel
+        # (FlashAttention-2, cuDNN, memory-efficient, or math fallback) without
+        # deprecated context-manager overhead.
+        return F.scaled_dot_product_attention(q, k, v, dropout_p=dropout_p)
 
     def forward(self, q, k, v):
-        """
-        einstein notation
-        b - batch
-        h - heads
-        n, i, j - sequence length (base sequence length, source, target)
-        d - feature dimension
-        """
-
-        q_len, k_len, device = q.shape[-2], k.shape[-2], q.device
-
-        scale = default(self.scale, q.shape[-1] ** -0.5)
-
+        """Compute attention over tensors shaped (batch, heads, seq_len, dim_head)."""
         if self.flash:
             return self.flash_attn(q, k, v)
 
-        # similarity
+        scale = default(self.scale, q.shape[-1] ** -0.5)
 
-        sim = einsum(f"b h i d, b h j d -> b h i j", q, k) * scale
+        # Similarity
+        sim = einsum("b h i d, b h j d -> b h i j", q, k) * scale
 
-        # attention
-
+        # Attention weights
         attn = sim.softmax(dim=-1)
         attn = self.attn_dropout(attn)
 
-        # aggregate values
-
-        out = einsum(f"b h i j, b h j d -> b h i d", attn, v)
-
-        return out
+        # Aggregate values
+        return einsum("b h i j, b h j d -> b h i d", attn, v)

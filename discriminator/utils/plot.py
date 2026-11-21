@@ -118,7 +118,7 @@ def get_rgb_colors(count):
     return rgb_colors
 
 
-# colormap=np.random.randint(0，256,size=(25,3)).astype(npfloat)/255
+# colormap = np.random.randint(0, 256, size=(25, 3)).astype(np.float32) / 255
 colormap = np.array(get_rgb_colors(10)).astype(np.float) / 255
 
 

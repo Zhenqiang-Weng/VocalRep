@@ -1,556 +1,301 @@
 # coding: utf-8
-__author__ = "Roman Solovyev (ZFTurbo): https://github.com/ZFTurbo/"
-__version__ = "1.0.6"
+"""Accelerate training entry point for speaker-guided music source separation."""
 
-import soundfile as sf
-import numpy as np
-import glob
-from tqdm.auto import tqdm
+from __future__ import annotations
+
 import os
-import torch
-import wandb
-import torch.nn as nn
-from torch.optim import Adam, AdamW, SGD, RAdam, RMSprop
-from torch.utils.data import DataLoader
-from torch.optim.lr_scheduler import ReduceLROnPlateau
-import torch.nn.functional as F
+import warnings
+
 from accelerate import Accelerator
+import torch
+import torch.nn.functional as F
+from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.utils.data import DataLoader
+from tqdm.auto import tqdm
+import wandb
 
 from utils.dataset_with_spk import MSSDatasetWithSpk
-from utils.model_utils import prefer_target_instrument, demix_with_spk
-from utils.metrics import get_metrics
-from utils.settings import manual_seed, get_model_from_config
-from utils.training_cli import build_training_parser, build_wandb_config
+from utils.settings import get_model_from_config
+from utils.train_utils import (
+    EXPORTABLE_MODELS,
+    MSSSpeakerValidationDataset,
+    StepLossMeter,
+    build_optimizer,
+    build_stft_processor,
+    build_train_dataloader,
+    configure_torch_runtime,
+    demix_with_spk_exportable,
+    enable_gradient_checkpointing,
+    evaluate_and_checkpoint,
+    init_wandb,
+    load_separator_checkpoint,
+    maybe_compile_model,
+    resolve_gradient_accumulation_steps,
+    run_pre_validation,
+    save_last_checkpoint,
+    set_multiprocessing_spawn,
+    validate_separator,
+)
+from utils.training_cli import build_training_parser
 
-import warnings
+__author__ = "Roman Solovyev (ZFTurbo): https://github.com/ZFTurbo/"
+__version__ = "1.1.0"
 
 warnings.filterwarnings("ignore")
 
-from models.preprocess.feature_extract import STFTProcessorBatch, STFTConfig
-
 METRIC_LIST = ["sdr", "si_sdr"]
-AVAILABLE_MODELS = [
-    "bs_roformer_exportable",
-    "spk_bs_roformer_exportable",
-    "speaker_mel_band_roformer_exportable",
+AVAILABLE_MODELS = list(EXPORTABLE_MODELS)
+MSSValidationDataset = MSSSpeakerValidationDataset
+__all__ = [
+    "AVAILABLE_MODELS",
+    "METRIC_LIST",
+    "MSSValidationDataset",
+    "demix_with_spk_exportable",
+    "train_model",
+    "valid",
 ]
 
 
-def _get_windowing_array(window_size, fade_size, device):
-    window = torch.ones(window_size, device=device)
-    fadein = torch.linspace(0, 1, fade_size, device=device)
-    fadeout = torch.linspace(1, 0, fade_size, device=device)
-    window[:fade_size] = fadein
-    window[-fade_size:] = fadeout
-    return window
-
-
-def demix_with_spk_exportable(config, model, mix, spk_emb, device, stft_processor):
-    model.eval()
-
-    if hasattr(config, "inference") and hasattr(config.inference, "chunk_size"):
-        chunk_size = config.inference.chunk_size
-    else:
-        chunk_size = getattr(config.audio, "chunk_size", 882000)
-
-    num_overlap = getattr(config.inference, "num_overlap", 2)
-    step = chunk_size // num_overlap
-    border = chunk_size - step
-    fade_size = step // 10
-
-    instruments = config.training.instruments
-    num_stems = len(instruments)
-
-    if isinstance(mix, np.ndarray):
-        mix = torch.from_numpy(mix).float()
-    mix = mix.to(device)
-
-    if mix.ndim == 1:
-        mix = mix.unsqueeze(0).repeat(2, 1)
-    elif mix.shape[0] == 1:
-        mix = mix.repeat(2, 1)
-
-    channels, length_init = mix.shape
-
-    if length_init > 2 * border and border > 0:
-        mix = torch.nn.functional.pad(mix, (border, border), mode="reflect")
-    else:
-        border = 0
-
-    total_samples = mix.shape[1]
-    result = torch.zeros((num_stems, channels, total_samples), device=device)
-    counter = torch.zeros((1, 1, total_samples), device=device)
-
-    windowing_array = _get_windowing_array(chunk_size, fade_size, device)
-
-    start = 0
-    with torch.no_grad():
-        while start < total_samples:
-            end = start + chunk_size
-            if end > total_samples:
-                end = total_samples
-
-            chunk = mix[:, start:end]
-            actual_len = chunk.shape[1]
-            if actual_len < chunk_size:
-                chunk = torch.nn.functional.pad(
-                    chunk, (0, chunk_size - actual_len), mode="constant", value=0
-                )
-
-            chunk_input = chunk.unsqueeze(0)
-            chunk_stft = stft_processor.stft_batch(chunk_input)
-            output_stft = model(chunk_stft, spk_emb)
-            output_audio = stft_processor.istft_batch(output_stft).squeeze(0)
-
-            window = windowing_array.clone()
-            if start == 0:
-                window[:fade_size] = 1.0
-            if start + chunk_size >= total_samples:
-                window[-fade_size:] = 1.0
-
-            output_audio = output_audio[:, :, :actual_len]
-            win_part = window[:actual_len]
-
-            result[:, :, start:end] += output_audio * win_part
-            counter[:, :, start:end] += win_part
-
-            start += step
-
-    result = result / torch.clamp(counter, min=1e-8)
-
-    if border > 0:
-        result = result[:, :, border:-border]
-
-    result_np = result.cpu().numpy()
-
-    output = {}
-    for i, instr in enumerate(instruments):
-        output[instr] = result_np[i]
-
-    return output
-
-
 def valid(model, valid_loader, args, config, device, verbose=False, stft_processor=None):
-    instruments = prefer_target_instrument(config)
-
-    all_metrics = {}
-    for metric in METRIC_LIST:
-        all_metrics[metric] = {}
-        for instr in instruments:
-            all_metrics[metric][instr] = []
-
-    all_mixtures_path = valid_loader
-    if verbose:
-        all_mixtures_path = tqdm(valid_loader, ncols=200)
-
-    pbar_dict = {}
-    for batch in all_mixtures_path:
-        path = batch[0][0]
-        spk_emb = batch[1].to(device)
-
-        mix, sr = sf.read(path)
-        folder = os.path.dirname(path)
-
-        if args.model_type in AVAILABLE_MODELS:
-            res = demix_with_spk_exportable(config, model, mix.T, spk_emb, device, stft_processor)
-        else:
-            res = demix_with_spk(config, model, mix.T, spk_emb, device, model_type=args.model_type)
-
-        for instr in instruments:
-            if instr != "other" or config.training.other_fix is False:
-                track, sr1 = sf.read(folder + "/{}.wav".format(instr))
-            else:
-                track, sr1 = sf.read(folder + "/{}.wav".format("vocals"))
-                track = mix - track
-            references = np.expand_dims(track, axis=0)
-            estimates = np.expand_dims(res[instr].T, axis=0)
-
-            results = get_metrics(METRIC_LIST, references, estimates, mix)
-            for metric_name, value in results:
-                single_val = torch.tensor([value], device=device, dtype=torch.float32)
-                all_metrics[metric_name][instr].append(single_val)
-                pbar_dict["{}_{}".format(metric_name, instr)] = value
-        if verbose:
-            all_mixtures_path.set_postfix(pbar_dict)
-
-    return all_metrics
+    """Evaluate a speaker-guided separation model on the validation split."""
+    return validate_separator(
+        model,
+        valid_loader,
+        args,
+        config,
+        device,
+        METRIC_LIST,
+        verbose=verbose,
+        stft_processor=stft_processor,
+        use_spk=True,
+    )
 
 
-class MSSValidationDataset(torch.utils.data.Dataset):
-    def __init__(self, args):
-        all_mixtures_path = []
-        for valid_path in args.valid_path:
-            part = sorted(glob.glob(valid_path + "/*/mixture.wav"))
-            if len(part) == 0:
-                print("No validation data found in: {}".format(valid_path))
-            all_mixtures_path += part
-        self.list_of_files = all_mixtures_path
-
-    def __len__(self):
-        return len(self.list_of_files)
-
-    def __getitem__(self, index):
-        path = self.list_of_files[index]
-        folder = os.path.dirname(path)
-        embedding_path = os.path.join(folder, "embeddings.npy")
-
-        embedding = torch.zeros(192)
-
-        if os.path.exists(embedding_path):
-            try:
-                embeddings = np.load(embedding_path)
-                if embeddings.shape[0] > 0:
-                    emb_mean = np.mean(embeddings, axis=0)
-                    embedding = torch.from_numpy(emb_mean).float()
-            except Exception as e:
-                print(f"Error loading embedding for {path}: {e}")
-
-        return path, embedding
+def _to_float(value) -> float:
+    return float(value.detach().item()) if isinstance(value, torch.Tensor) else float(value)
 
 
 def train_model(args):
-    accelerator = Accelerator()
-    device = accelerator.device
-
     parser = build_training_parser(
         "Train a speaker-guided music source separator.",
         include_mix_consistent_loss=True,
     )
-
-    if args is None:
-        args = parser.parse_args()
-    else:
-        args = parser.parse_args(args)
-
-    manual_seed(args.seed + accelerator.process_index)
-    torch.backends.cudnn.deterministic = args.deterministic
-    torch.backends.cudnn.benchmark = not args.deterministic
-    if args.deterministic:
-        torch.use_deterministic_algorithms(True, warn_only=True)
-
-    try:
-        torch.multiprocessing.set_start_method("spawn", force=True)
-    except RuntimeError as e:
-        accelerator.print(f"Warning: multiprocessing start method already set: {e}")
+    args = parser.parse_args() if args is None else parser.parse_args(args)
 
     model, config = get_model_from_config(args.model_type, args.config_path)
-    accelerator.print("Instruments: {}".format(config.training.instruments))
-    accelerator.print(f"[DEBUG] Number of processes: {accelerator.num_processes}")
-    accelerator.print(f"[DEBUG] Device: {accelerator.device}")
-    accelerator.print(f"[DEBUG] Is main process: {accelerator.is_main_process}")
+    grad_accum_steps = resolve_gradient_accumulation_steps(args, config, auxiliary_active=False)
+    accelerator = Accelerator(gradient_accumulation_steps=grad_accum_steps)
+    device = accelerator.device
+
+    configure_torch_runtime(
+        args.seed + accelerator.process_index,
+        deterministic=args.deterministic,
+        allow_tf32=args.allow_tf32,
+    )
+    set_multiprocessing_spawn(accelerator)
+
+    accelerator.print(f"Instruments: {config.training.instruments}")
+    accelerator.print(
+        f"Processes: {accelerator.num_processes} | Device: {device} | "
+        f"Grad accum: {grad_accum_steps} | Mixed precision: {accelerator.mixed_precision}"
+    )
 
     os.makedirs(args.results_path, exist_ok=True)
 
-    device_ids = args.device_ids
     batch_size = config.training.batch_size
-    run_config = build_wandb_config(args, config, device_ids, batch_size)
-
-    if accelerator.is_main_process:
-        if args.wandb_key is not None and args.wandb_key.strip() != "":
-            wandb.login(key=args.wandb_key)
-            wandb.init(project=args.wandb_project, name=args.wandb_name, config=run_config)
-        else:
-            wandb.init(
-                project=args.wandb_project,
-                name=args.wandb_name,
-                mode="offline",
-                config=run_config,
-            )
-    else:
-        wandb.init(mode="disabled")
+    init_wandb(accelerator, args, config, args.device_ids, batch_size)
 
     config.training.num_steps *= accelerator.num_processes
 
-    # Only the main process builds the metadata cache; the remaining processes
-    # wait and then reuse it instead of writing the same pickle concurrently.
+    # Build the metadata cache once on rank 0 before worker processes open it.
     with accelerator.main_process_first():
         trainset = MSSDatasetWithSpk(
             config,
             args.data_path,
             batch_size=batch_size,
-            metadata_path=os.path.join(
-                args.results_path, "metadata_{}.pkl".format(args.dataset_type)
-            ),
+            metadata_path=os.path.join(args.results_path, f"metadata_{args.dataset_type}.pkl"),
             dataset_type=args.dataset_type,
             verbose=accelerator.is_main_process,
         )
 
-    train_loader = DataLoader(
+    train_loader = build_train_dataloader(
         trainset,
         batch_size=batch_size,
-        shuffle=True,
         num_workers=args.num_workers,
         pin_memory=args.pin_memory,
+        persistent_workers=args.persistent_workers,
+        prefetch_factor=args.prefetch_factor,
+        drop_last=True,
     )
 
     validset = MSSValidationDataset(args)
     valid_dataset_length = len(validset)
     valid_loader = DataLoader(validset, batch_size=1, shuffle=False)
 
-    if args.start_check_point != "":
-        accelerator.print("Start from checkpoint: {}".format(args.start_check_point))
-        checkpoint = torch.load(args.start_check_point, map_location="cpu")
-        model.load_state_dict(checkpoint, strict=False)
-        accelerator.print("Checkpoint loaded successfully")
+    load_separator_checkpoint(model, args.start_check_point, accelerator, strict=False)
+    enable_gradient_checkpointing(
+        model, args.gradient_checkpointing, config=config, accelerator=accelerator
+    )
 
-    optim_params = dict()
-    if "optimizer" in config:
-        optim_params = dict(config["optimizer"])
-        accelerator.print("Optimizer params from config:\n{}".format(optim_params))
-
-    if config.training.optimizer == "adam":
-        optimizer = Adam(model.parameters(), lr=config.training.lr, **optim_params)
-    elif config.training.optimizer == "adamw":
-        optimizer = AdamW(model.parameters(), lr=config.training.lr, **optim_params)
-    elif config.training.optimizer == "radam":
-        optimizer = RAdam(model.parameters(), lr=config.training.lr, **optim_params)
-    elif config.training.optimizer == "rmsprop":
-        optimizer = RMSprop(model.parameters(), lr=config.training.lr, **optim_params)
-    elif config.training.optimizer == "prodigy":
-        from prodigyopt import Prodigy
-
-        optimizer = Prodigy(model.parameters(), lr=config.training.lr, **optim_params)
-    elif config.training.optimizer == "adamw8bit":
-        import bitsandbytes as bnb
-
-        optimizer = bnb.optim.AdamW8bit(model.parameters(), lr=config.training.lr, **optim_params)
-    elif config.training.optimizer == "sgd":
-        accelerator.print("Use SGD optimizer")
-        optimizer = SGD(model.parameters(), lr=config.training.lr, **optim_params)
-    else:
-        accelerator.print("Unknown optimizer: {}".format(config.training.optimizer))
-        exit()
+    # Move parameters onto the target device before building the optimizer so CUDA fused kernels engage.
+    model = model.to(device)
+    optimizer = build_optimizer(config, model, accelerator)
 
     if accelerator.is_main_process:
-        print("Processes GPU: {}".format(accelerator.num_processes))
+        print(f"Processes GPU: {accelerator.num_processes}")
         print(
-            "Patience: {} Reduce factor: {} Batch size: {} Optimizer: {}".format(
-                config.training.patience,
-                config.training.reduce_factor,
-                batch_size,
-                config.training.optimizer,
-            )
+            f"Patience: {config.training.patience} Reduce factor: {config.training.reduce_factor} "
+            f"Batch size: {batch_size} Optimizer: {config.training.optimizer}"
         )
 
     scheduler = ReduceLROnPlateau(
-        optimizer, "max", patience=config.training.patience, factor=config.training.reduce_factor
+        optimizer,
+        "max",
+        patience=config.training.patience,
+        factor=config.training.reduce_factor,
+    )
+
+    model = maybe_compile_model(
+        model,
+        compile_enabled=args.compile_model,
+        compile_mode=args.compile_mode,
+        accelerator=accelerator,
     )
 
     model, optimizer = accelerator.prepare(model, optimizer)
     train_loader, scheduler = accelerator.prepare(train_loader, scheduler)
     valid_loader = accelerator.prepare(valid_loader)
 
-    accelerator.print(f"[DEBUG] Model prepared on device: {next(model.parameters()).device}")
+    accelerator.print(f"Model prepared on device: {next(model.parameters()).device}")
 
-    stft_cfg = STFTConfig(
-        n_fft=getattr(config.audio, "n_fft", 2048),
-        hop_length=getattr(config.audio, "hop_length", 512),
-        win_length=getattr(config.audio, "stft_win_length", 2048),
-        normalized=getattr(config.model, "stft_normalized", False),
-        center=True,
-        istft_length=getattr(config.audio, "chunk_size", None),
-        stereo=getattr(config.model, "stereo", True),
-        num_stems=getattr(config.model, "num_stems", 1),
-        use_multi_stft_loss=True,
-        multi_weight=getattr(config.model, "multi_stft_resolution_loss_weight", 1.0),
-        multi_window_sizes=tuple(
-            getattr(
-                config.model, "multi_stft_resolutions_window_sizes", (4096, 2048, 1024, 512, 256)
-            )
-        ),
-        multi_hop_length=getattr(config.model, "multi_stft_hop_size", 147),
-        multi_normalized=getattr(config.model, "multi_stft_normalized", False),
-    )
-    stft_processor = STFTProcessorBatch(stft_cfg, device=device)
-
-    def gather_sdr_metrics(accelerator, sdr_dict):
-        result = {}
-        for instr, values in sdr_dict.items():
-            dtype = values[0].dtype if values else torch.float32
-            local_tensor = (
-                torch.cat(values, dim=0)
-                if values
-                else torch.empty(0, device=accelerator.device, dtype=dtype)
-            )
-            result[instr] = accelerator.gather_for_metrics(local_tensor).cpu()
-        return result
+    is_exportable = args.model_type in EXPORTABLE_MODELS
+    stft_processor = build_stft_processor(config, device) if is_exportable else None
 
     if args.pre_valid:
-        sdr_list = valid(
-            model,
-            valid_loader,
-            args,
-            config,
-            device,
-            verbose=accelerator.is_main_process,
+        run_pre_validation(
+            accelerator=accelerator,
+            model=model,
+            valid_loader=valid_loader,
+            valid_dataset_length=valid_dataset_length,
+            args=args,
+            config=config,
+            device=device,
+            metric_list=["sdr"],
             stft_processor=stft_processor,
+            use_spk=True,
         )
-        sdr_list = gather_sdr_metrics(accelerator, sdr_list["sdr"])
-        accelerator.wait_for_everyone()
-        sdr_avg = 0.0
-        instruments = prefer_target_instrument(config)
-        for instr in instruments:
-            sdr_data = sdr_list[instr].numpy()
-            sdr_val = sdr_data[:valid_dataset_length].mean()
-            accelerator.print(
-                "Instr SDR {}: {:.4f} Debug: {}".format(instr, sdr_val, len(sdr_data))
-            )
-            sdr_avg += sdr_val
-        sdr_avg /= len(instruments)
-        if len(instruments) > 1:
-            accelerator.print("SDR Avg: {:.4f}".format(sdr_avg))
-        sdr_list = None
 
-    accelerator.print("Train for: {}".format(config.training.num_epochs))
-    best_sdr = 0
+    accelerator.print(f"Train for: {config.training.num_epochs}")
+    best_sdr = -float("inf")
     best_si_sdr = -float("inf")
     current_step = 0
 
+    log_interval = max(1, int(args.log_interval))
+    valid_every = max(1, int(args.valid_every))
+    empty_cache_interval = max(0, int(args.empty_cache_interval))
+    use_multi_stft = getattr(config.training, "use_multi_stft_loss", True)
+    mix_consistent_weight = getattr(config.training, "total_mix_consistent_loss_weight", 0.5)
+
     for epoch in range(config.training.num_epochs):
         model.train()
-        accelerator.print(
-            "Train epoch: {} Learning rate: {}".format(epoch, optimizer.param_groups[0]["lr"])
-        )
-        loss_val = 0.0
-        total = 0
+        accelerator.print(f"Train epoch: {epoch} Learning rate: {optimizer.param_groups[0]['lr']}")
+        loss_meter = StepLossMeter(device)
+        num_batches = len(train_loader)
 
         pbar = tqdm(train_loader, disable=not accelerator.is_main_process, ncols=130)
         for i, (batch, mixes, spk_emb) in enumerate(pbar):
-            y = batch
-            x = mixes
+            total_mix_loss = None
+            with accelerator.accumulate(model):
+                if is_exportable:
+                    x_stft = stft_processor.stft_batch(mixes)
+                    y_stft = model(x_stft, spk_emb)
+                    y_ = stft_processor.istft_batch(y_stft)
+                    loss = stft_processor.compute_loss(y_, batch, use_multi_stft=use_multi_stft)
+                else:
+                    loss, y_ = model(mixes, spk_emb, batch)
 
-            if args.model_type in [
-                "bs_roformer_exportable",
-                "spk_bs_roformer_exportable",
-                "speaker_mel_band_roformer_exportable",
-            ]:
-                x_stft = stft_processor.stft_batch(x)
-                y_stft = model(x_stft, spk_emb)
-                y_ = stft_processor.istft_batch(y_stft)
-                use_multi_stft = getattr(config.training, "use_multi_stft_loss", True)
-                loss = stft_processor.compute_loss(y_, y, use_multi_stft=use_multi_stft)
-            else:
-                loss, y_ = model(x, spk_emb, y)
-
-            if args.use_mix_consistent_loss:
-                all_ins = y_.sum(dim=1)
-                pre_all_ins = y.sum(dim=1)
-                total_mix_loss = F.l1_loss(all_ins, pre_all_ins)
-                total_mix_consistent_loss_weight = getattr(
-                    config.training, "total_mix_consistent_loss_weight", 0.5
-                )
-                loss += total_mix_consistent_loss_weight * total_mix_loss
-                mixing_loss_value = total_mix_loss.item()
-
-            accelerator.backward(loss)
-            if config.training.grad_clip:
-                accelerator.clip_grad_norm_(model.parameters(), config.training.grad_clip)
-
-            optimizer.step()
-            optimizer.zero_grad()
-
-            li = loss.item()
-            loss_val += li
-            total += 1
-            if accelerator.is_main_process:
-                log_dict = {
-                    "loss": 100 * li,
-                    "avg_loss": 100 * loss_val / (i + 1),
-                    "total": total,
-                    "loss_val": loss_val,
-                    "i": i,
-                }
                 if args.use_mix_consistent_loss:
-                    log_dict["mix_consistent_loss"] = 100 * mixing_loss_value
-                wandb.log(log_dict)
-                pbar.set_postfix({"loss": 100 * li, "avg_loss": 100 * loss_val / (i + 1)})
+                    total_mix_loss = F.l1_loss(y_.sum(dim=1), batch.sum(dim=1))
+                    loss = loss + mix_consistent_weight * total_mix_loss
+
+                accelerator.backward(loss)
+                if accelerator.sync_gradients and config.training.grad_clip:
+                    accelerator.clip_grad_norm_(model.parameters(), config.training.grad_clip)
+
+                optimizer.step()
+                optimizer.zero_grad(set_to_none=True)
+
+            if accelerator.is_main_process:
+                loss_meter.update(loss)
+                should_log = ((i + 1) % log_interval == 0) or (i + 1 == num_batches)
+                if should_log:
+                    window_loss, avg_loss = loss_meter.flush_window()
+                    log_dict = {
+                        "loss": 100.0 * window_loss,
+                        "avg_loss": 100.0 * avg_loss,
+                        "total": loss_meter.epoch_count,
+                        "i": i,
+                    }
+                    if total_mix_loss is not None:
+                        log_dict["mix_consistent_loss"] = 100.0 * _to_float(total_mix_loss)
+                    wandb.log(log_dict)
+                    pbar.set_postfix(
+                        {
+                            "loss": f"{100.0 * window_loss:.4f}",
+                            "avg_loss": f"{100.0 * avg_loss:.4f}",
+                        }
+                    )
 
             current_step += 1
+            if (
+                empty_cache_interval > 0
+                and current_step % empty_cache_interval == 0
+                and torch.cuda.is_available()
+            ):
+                torch.cuda.empty_cache()
+
+        # Release references to the last training batch before checkpointing/validation.
+        if num_batches > 0:
+            del batch, mixes, spk_emb, y_, loss, total_mix_loss
 
         if accelerator.is_main_process:
-            print("Training loss: {:.6f}".format(loss_val / total))
-            wandb.log({"train_loss": loss_val / total, "epoch": epoch})
+            epoch_loss = loss_meter.epoch_average()
+            print(f"Training loss: {epoch_loss:.6f}")
+            wandb.log({"train_loss": epoch_loss, "epoch": epoch})
 
-        store_path = args.results_path + "/last_{}.ckpt".format(args.model_type)
-        accelerator.wait_for_everyone()
-        if accelerator.is_main_process:
-            unwrapped_model = accelerator.unwrap_model(model)
-            accelerator.save(unwrapped_model.state_dict(), store_path)
+        save_last_checkpoint(accelerator, model, args.results_path, args.model_type)
 
-        metrics_dict = valid(
-            model,
-            valid_loader,
-            args,
-            config,
-            device,
-            verbose=accelerator.is_main_process,
-            stft_processor=stft_processor,
+        should_validate = (
+            not args.skip_valid
+            and valid_dataset_length > 0
+            and (((epoch + 1) % valid_every == 0) or (epoch + 1 == config.training.num_epochs))
         )
-
-        gathered_metrics = {}
-        for metric_name, metric_data in metrics_dict.items():
-            gathered_metrics[metric_name] = gather_sdr_metrics(accelerator, metric_data)
+        if should_validate:
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            sdr_avg, _, best_sdr, best_si_sdr = evaluate_and_checkpoint(
+                accelerator=accelerator,
+                model=model,
+                valid_loader=valid_loader,
+                valid_dataset_length=valid_dataset_length,
+                args=args,
+                config=config,
+                device=device,
+                metric_list=METRIC_LIST,
+                epoch=epoch,
+                best_sdr=best_sdr,
+                best_si_sdr=best_si_sdr,
+                stft_processor=stft_processor,
+                use_spk=True,
+                save_best_sdr=True,
+            )
+            # Every distributed process must advance its scheduler identically.
+            scheduler.step(sdr_avg)
 
         accelerator.wait_for_everyone()
 
-        sdr_avg = 0.0
-        si_sdr_avg = 0.0
-        instruments = prefer_target_instrument(config)
-        metrics_to_log = {}
-
-        for metric_name in METRIC_LIST:
-            metric_avg = 0.0
-            for instr in instruments:
-                metric_data = gathered_metrics[metric_name][instr].numpy()
-                metric_val = metric_data[:valid_dataset_length].mean()
-                if accelerator.is_main_process:
-                    print(
-                        "Instr {} {}: {:.4f} Debug: {}".format(
-                            instr, metric_name.upper(), metric_val, len(metric_data)
-                        )
-                    )
-                    metrics_to_log[f"{instr}_{metric_name}"] = metric_val
-                metric_avg += metric_val
-            metric_avg /= len(instruments)
-            if metric_name == "sdr":
-                sdr_avg = metric_avg
-            elif metric_name == "si_sdr":
-                si_sdr_avg = metric_avg
-            if accelerator.is_main_process:
-                metrics_to_log[f"{metric_name}_avg"] = metric_avg
-                if len(instruments) > 1:
-                    print("{} Avg: {:.4f}".format(metric_name.upper(), metric_avg))
-
-        if accelerator.is_main_process:
-            metrics_to_log["best_sdr"] = best_sdr
-            metrics_to_log["best_si_sdr"] = best_si_sdr
-            metrics_to_log["epoch"] = epoch
-            wandb.log(metrics_to_log)
-
-            if si_sdr_avg > best_si_sdr:
-                store_path = args.results_path + "/model_{}_ep_{}_sisdr_{:.4f}.ckpt".format(
-                    args.model_type, epoch, si_sdr_avg
-                )
-                print("Store weights (Best SI-SDR): {}".format(store_path))
-                unwrapped_model = accelerator.unwrap_model(model)
-                accelerator.save(unwrapped_model.state_dict(), store_path)
-                best_si_sdr = si_sdr_avg
-
-            if sdr_avg > best_sdr:
-                store_path = args.results_path + "/model_{}_ep_{}_sdr_{:.4f}.ckpt".format(
-                    args.model_type, epoch, sdr_avg
-                )
-                print("Store weights (Best SDR): {}".format(store_path))
-                unwrapped_model = accelerator.unwrap_model(model)
-                accelerator.save(unwrapped_model.state_dict(), store_path)
-                best_sdr = sdr_avg
-
-        # Every distributed process must advance its scheduler identically.
-        scheduler.step(sdr_avg)
-
-        metrics_dict = None
-        gathered_metrics = None
-        accelerator.wait_for_everyone()
+    if accelerator.is_main_process:
+        wandb.finish()
 
 
 if __name__ == "__main__":

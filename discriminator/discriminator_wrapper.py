@@ -34,13 +34,15 @@ class DiscriminatorWrapper(AuxiliaryTraining):
         self.accelerator = accelerator
         self.device = torch.device(accelerator.device if accelerator else device or "cpu")
         self.model = self._create_model().to(self.device)
-        self.optimizer = torch.optim.Adam(
-            self.model.parameters(),
+        adam_kwargs = dict(
             lr=self.config.lr,
             betas=self.config.betas,
             eps=self.config.eps,
             weight_decay=self.config.weight_decay,
         )
+        if self.device.type == "cuda":
+            adam_kwargs["fused"] = True
+        self.optimizer = torch.optim.Adam(self.model.parameters(), **adam_kwargs)
         self.scheduler = NoamScheduler(
             self.optimizer, n_warmup=self.config.n_warmup, init_scale=self.config.init_scale
         )
