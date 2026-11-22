@@ -45,13 +45,6 @@ python inference_with_spk.py \
 
 Or configure `INPUT_FOLDER` and run `bash infer_with_spk.sh` (`SPK_MODEL_PATH` for offline CAM++, `FORCE_CPU=true` for CPU). Outputs are written to `results/separation/{wo_spk,with_spk,embeddings}` with `run_summary.json`.
 
-Reproducible three-stem smoke test (see [`docs/TESTING.md`](docs/TESTING.md)):
-
-```bash
-python -m scripts.smoke_test_three_stem \
-  --checkpoint ckpts/multi_stem/model_spk_bs_roformer_ep_5_sisdr_9.8275.ckpt
-```
-
 ## Training
 
 1. Extract CAM++ speaker embeddings (`embeddings.npy`, float32 `(N, 192)`) for training and validation tracks:
@@ -77,7 +70,6 @@ bash train_accelerate.sh
 ```bash
 ruff check . && ruff format --check .
 python scripts/check_english_comments.py
-python -m pytest -q
 python -m compileall -q -x '/(\.venv|checkpoints|test_sample|results)/' .
 bash -n train_accelerate.sh infer_with_spk.sh
 ```

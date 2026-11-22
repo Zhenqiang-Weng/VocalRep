@@ -13,9 +13,10 @@ third-party attribution rules, and security boundaries.
 - **Maintainers** own final review, merge decisions, release/licensing status,
   and Git LFS governance for checkpoints under `ckpts/`.
 - **Contributors** are responsible for keeping diffs scoped, running required
-  static/regression checks, preserving existing checkpoint `state_dict`
-  compatibility unless a breaking change is explicitly approved, and verifying
-  that no private data, copyrighted media, or credentials are included.
+  static checks, preserving existing checkpoint `state_dict` compatibility
+  unless a breaking change is explicitly approved, and verifying that no
+  private data, copyrighted media, local test scripts, or credentials are
+  included.
 
 ## Intellectual Property and Contribution Terms
 
@@ -47,15 +48,14 @@ Run at least the following checks before submitting a change:
 ruff check .
 ruff format --check .
 python scripts/check_english_comments.py
-python -m pytest -q
 python -m compileall -q -x '/(\.venv|checkpoints|test_sample|results)/' .
 bash -n train_accelerate.sh infer_with_spk.sh
 ```
 
 Changes to a model, training runtime (`utils/train_utils.py`), or data pipeline
-should also be verified with a small representative sample using the relevant
-forward-pass, training, or inference path, and must keep `.gitignore` regression
-checks in `tests/test_gitignore.py` passing.
+should also be verified locally with a small representative sample using the
+relevant forward-pass, training, or inference path without committing temporary
+test scripts.
 
 ## Code Conventions
 

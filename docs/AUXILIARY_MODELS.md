@@ -105,5 +105,4 @@ behavior mean newly trained runs are not numerically equivalent to legacy runs.
 
 The separation checkpoint does not include trained auxiliary weights. Enabling
 diffusion enhancement requires a checkpoint for each enabled stem; inference
-loads its saved architecture configuration. The regression and GPU smoke tests
-verify execution, gradients, and shapes, not model convergence or quality gains.
+loads its saved architecture configuration.

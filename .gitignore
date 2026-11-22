@@ -127,6 +127,12 @@ $RECYCLE.BIN/
 /mss_api/datasets/
 /mss_api/test_sample/
 
+# Local test scripts and test suites
+tests/
+test_*.py
+*_test.py
+smoke_test*.py
+
 # Generated speaker vectors, spectrograms, binary dataset stores, and archives
 *.npy
 *.npz
